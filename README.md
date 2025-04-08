@@ -5,36 +5,43 @@ BOPMaps is an immersive music sharing platform that allows users to drop music p
 ## 🌐 Frontend Overview
 **Version:** 1.0  
 **Lead Devs:** Jah, Mason, Eric, Isaiah, Danny  
-**Stack:** Flutter (Mobile UI) • Unity (3D Visualization) • Spotify/Apple/Soundcloud SDKs • Geolocation Services
+**Stack:** Flutter (Mobile UI) • Mapbox/flutter_map • Spotify/Apple/Soundcloud SDKs • Geolocation Services
 
 ---
 
 ## 🚀 Vision
-BOPMaps merges **gamification**, **location-based discovery**, and **social listening** to create a unique musical geocaching experience. The app's frontend leverages Flutter's cross-platform capabilities with Unity's powerful 3D rendering to deliver an immersive, beautiful experience for music discovery.
+BOPMaps merges **gamification**, **location-based discovery**, and **social listening** to create a unique musical geocaching experience. The app leverages Flutter's powerful rendering capabilities and animation system to deliver an immersive, beautiful experience for music discovery.
 
 ---
 
 ## 🏗️ Technology Architecture
 
-### Flutter + Unity Integration
-BOPMaps uses a hybrid approach combining:
+### Flutter-Powered UI & Visualization
+BOPMaps uses a streamlined approach with Flutter handling all aspects of the application:
 
-- **Flutter**: Primary application framework handling:
-  - UI/UX and navigation
-  - State management
-  - API communication
+- **UI/UX and Navigation**
+  - Clean, intuitive interface optimized for music discovery
+  - Smooth transitions and animations between screens
+  - Responsive design for all device sizes
+
+- **Map Visualization**
+  - Interactive 3D-like maps using Mapbox GL or flutter_map
+  - Custom pin styling and animations
+  - Visual "aura" effects using Flutter's powerful animation system
+  - Dynamic camera controls for immersive exploration
+
+- **Core Functionality**
+  - State management (Provider/Bloc)
+  - API communication with backend
   - User authentication
-  - Social features
   - Music service integration
+  - Location services and geofencing
 
-- **Unity**: 3D visualization engine handling:
-  - Interactive 3D map rendering
-  - Pin visualization and animation
-  - Immersive "aura" effects
-  - Visual gamification elements
-  - Spatial audio experiences
-
-The integration is facilitated through the [flutter_unity_widget](https://github.com/juicycleff/flutter-unity-view-widget) package, enabling seamless communication between Flutter and Unity components.
+By using Flutter exclusively, we gain:
+- Simplified development workflow
+- Better performance on mobile devices
+- Easier maintenance and updates
+- Consistent experience across platforms
 
 ### System Architecture Diagram
 
@@ -48,8 +55,8 @@ The integration is facilitated through the [flutter_unity_widget](https://github
 | |                               | |
 | | +---------------------------+ | |
 | | |                           | | |
-| | |    Unity Integration      | | |
-| | |    (3D Map & Pins)        | | |
+| | |    Map Visualization      | | |
+| | |    (Mapbox GL/flutter_map)| | |
 | | |                           | | |
 | | +---------------------------+ | |
 | |                               | |
@@ -111,10 +118,10 @@ The integration is facilitated through the [flutter_unity_widget](https://github
 ## 🧩 Key Features & Implementation
 
 ### 🗺️ Immersive Map Experience
-- **3D World Visualization**: Unity-powered interactive map with custom styling
-- **Animated Music Pins**: Visual representation of pins with animations based on music genre and popularity
-- **Aura Effects**: Proximity-based visual effects showing pin discovery radius
-- **Spatial Audio**: Hear snippets of music when approaching pins
+- **3D-Like Map Visualization**: Tilted camera perspective with Mapbox GL
+- **Animated Music Pins**: Visual representation of pins with bouncing animations and glow effects based on music genre and popularity
+- **Aura Effects**: Proximity-based visual effects using radial gradients and animated containers
+- **Spatial Audio Experience**: Fade in/out audio playback based on proximity to pins
 
 ### 👤 User Experience
 - **Intuitive UI**: Clean, music-focused design language
@@ -183,13 +190,9 @@ bopmaps_frontend/
 │   │   │   ├── apple_music_service.dart
 │   │   │   └── soundcloud_service.dart
 │   │   │
-│   │   ├── location/
-│   │   │   ├── location_service.dart
-│   │   │   └── geofencing_service.dart
-│   │   │
-│   │   └── unity/
-│   │       ├── unity_bridge.dart
-│   │       └── map_controller.dart
+│   │   └── location/
+│   │       ├── location_service.dart
+│   │       └── geofencing_service.dart
 │   │
 │   ├── providers/            # State management
 │   │   ├── auth_provider.dart
@@ -225,7 +228,9 @@ bopmaps_frontend/
 │   │   │   └── custom_button.dart
 │   │   │
 │   │   ├── map/
-│   │   │   ├── unity_map_widget.dart
+│   │   │   ├── map_widget.dart
+│   │   │   ├── pin_widget.dart
+│   │   │   ├── aura_effect_widget.dart
 │   │   │   └── pin_card.dart
 │   │   │
 │   │   ├── music/
@@ -238,30 +243,18 @@ bopmaps_frontend/
 │   │
 │   └── utils/                # Utility functions
 │       ├── location_utils.dart
+│       ├── animation_utils.dart
 │       ├── api_exceptions.dart
 │       └── formatters.dart
 │
-├── unity/                    # Unity Project
-│   ├── Assets/
-│   │   ├── Scripts/
-│   │   │   ├── MapController.cs
-│   │   │   ├── PinBehavior.cs
-│   │   │   ├── AuraEffect.cs
-│   │   │   └── FlutterBridge.cs
-│   │   │
-│   │   ├── Prefabs/
-│   │   │   ├── MusicPin.prefab
-│   │   │   ├── MapTerrain.prefab
-│   │   │   └── AuraEffect.prefab
-│   │   │
-│   │   ├── Materials/
-│   │   │   ├── PinMaterials/
-│   │   │   └── MapMaterials/
-│   │   │
-│   │   └── Scenes/
-│   │       └── MainMap.unity
+├── assets/                   # Static resources
+│   ├── images/
+│   │   ├── pin_skins/
+│   │   └── icons/
 │   │
-│   └── ProjectSettings/
+│   ├── animations/           # Lottie animations
+│   │
+│   └── audio/                # Audio effects
 │
 ├── test/                     # Flutter tests
 │   ├── unit/
@@ -278,9 +271,8 @@ bopmaps_frontend/
 ## 🛠️ Setup & Development
 
 ### Prerequisites
-- Flutter SDK (2.10.0 or later)
-- Dart SDK (2.16.0 or later)
-- Unity 2021.3 LTS or later
+- Flutter SDK (3.0.0 or later)
+- Dart SDK (2.17.0 or later)
 - Android Studio / XCode
 - Git
 
@@ -301,18 +293,50 @@ flutter pub get
 flutter pub run build_runner build --delete-conflicting-outputs
 ```
 
-#### 3. Unity Setup
-```bash
-# Open Unity Hub and add the project from the unity/ directory
-# Open the project and build for both Android and iOS
-# Export to the appropriate locations in the Flutter project
-```
-
-#### 4. Environment Configuration
+#### 3. Environment Configuration
 - Create a `.env` file from the example:
 ```bash
 cp .env.example .env
 # Edit .env with your API keys and endpoints
+```
+
+### Key Dependencies
+
+```yaml
+dependencies:
+  flutter:
+    sdk: flutter
+  # State management
+  provider: ^6.0.3
+  flutter_bloc: ^8.0.1
+  
+  # UI components
+  flutter_map: ^4.0.0        # For OpenStreetMap style maps
+  mapbox_gl: ^0.16.0         # For Mapbox 3D-like maps
+  
+  # Location services
+  geolocator: ^9.0.0
+  geofencing: ^2.0.0
+  
+  # Music services
+  spotify_sdk: ^2.3.0
+  audio_service: ^0.18.7
+  
+  # Networking
+  dio: ^5.0.0
+  retrofit: ^4.0.1
+  
+  # Animation
+  lottie: ^2.3.0
+  
+  # Storage
+  hive: ^2.2.3
+  flutter_secure_storage: ^8.0.0
+  
+  # Other utilities
+  intl: ^0.18.0
+  firebase_messaging: ^14.2.5
+  firebase_core: ^2.7.0
 ```
 
 ### Running the App
@@ -387,74 +411,271 @@ class PinsApiService {
 }
 ```
 
-### Unity-Flutter Communication
-Communication between Flutter and Unity uses message passing:
+---
 
+## 🎨 Key UI Components Implementation
+
+### Main Map Screen
 ```dart
-// Flutter side
-class UnityMapController {
-  final UnityWidgetController _unityWidgetController;
+class MapScreen extends StatefulWidget {
+  @override
+  _MapScreenState createState() => _MapScreenState();
+}
+
+class _MapScreenState extends State<MapScreen> {
+  MapboxMapController? _mapController;
   
-  UnityMapController(this._unityWidgetController);
-  
-  // Add a pin to the Unity map
-  void addPin(Pin pin) {
-    _unityWidgetController.postMessage(
-      'MapController',
-      'AddPin',
-      jsonEncode(pin.toUnityJson()),
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          // Map layer
+          MapboxMap(
+            accessToken: MAPBOX_ACCESS_TOKEN,
+            initialCameraPosition: CameraPosition(
+              target: LatLng(37.7749, -122.4194), // Starting position
+              zoom: 15.0,
+              pitch: 45.0, // Tilted camera for 3D-like effect
+            ),
+            onMapCreated: (controller) {
+              _mapController = controller;
+            },
+          ),
+          
+          // Aura effect around user (when close to pins)
+          Consumer<LocationProvider>(
+            builder: (context, locationProvider, child) {
+              return AuraEffectWidget(
+                radius: locationProvider.auraRadius,
+                position: locationProvider.userScreenPosition,
+              );
+            },
+          ),
+          
+          // Pins layer
+          Consumer<PinsProvider>(
+            builder: (context, pinsProvider, child) {
+              return Stack(
+                children: pinsProvider.nearbyPins.map((pin) => 
+                  Positioned(
+                    left: pin.screenX,
+                    top: pin.screenY,
+                    child: MusicPinWidget(
+                      pin: pin,
+                      onTap: () => _showPinDetails(pin),
+                    ),
+                  )
+                ).toList(),
+              );
+            },
+          ),
+          
+          // Top navigation buttons
+          Positioned(
+            top: 50,
+            right: 20,
+            child: Column(
+              children: [
+                FloatingActionButton(
+                  heroTag: "profile",
+                  child: Icon(Icons.person),
+                  onPressed: () => Navigator.pushNamed(context, '/profile'),
+                ),
+                SizedBox(height: 10),
+                FloatingActionButton(
+                  heroTag: "store",
+                  child: Icon(Icons.shopping_cart),
+                  onPressed: () => Navigator.pushNamed(context, '/store'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      
+      // Bottom navigation
+      bottomNavigationBar: BottomAppBar(
+        shape: CircularNotchedRectangle(),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            IconButton(
+              icon: Icon(Icons.explore),
+              onPressed: () {
+                // Already on map screen
+              },
+            ),
+            SizedBox(width: 48), // Space for FAB
+            IconButton(
+              icon: Icon(Icons.people),
+              onPressed: () => Navigator.pushNamed(context, '/friends'),
+            ),
+          ],
+        ),
+      ),
+      
+      // Floating action button for dropping pins
+      floatingActionButton: FloatingActionButton(
+        child: Icon(Icons.add_location),
+        onPressed: () => _showDropPinScreen(),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
     );
   }
   
-  // Set user location
-  void updateUserLocation(double lat, double lng) {
-    _unityWidgetController.postMessage(
-      'MapController',
-      'UpdateUserLocation',
-      jsonEncode({
-        'latitude': lat,
-        'longitude': lng,
-      }),
+  void _showPinDetails(Pin pin) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => PinDetailsSheet(pin: pin),
     );
   }
   
-  // Handle messages from Unity
-  void handleUnityMessage(dynamic message) {
-    // Process message from Unity...
+  void _showDropPinScreen() {
+    Navigator.pushNamed(context, '/drop_pin');
   }
 }
 ```
 
-```csharp
-// Unity side (C#)
-public class FlutterBridge : MonoBehaviour
-{
-    // Add a pin based on data from Flutter
-    public void AddPin(string pinJson)
-    {
-        var pinData = JsonUtility.FromJson<PinData>(pinJson);
-        // Create pin GameObject with data...
-    }
+### Aura Effect Widget
+```dart
+class AuraEffectWidget extends StatelessWidget {
+  final double radius;
+  final Point position;
+  
+  const AuraEffectWidget({
+    Key? key,
+    required this.radius,
+    required this.position,
+  }) : super(key: key);
+  
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: position.x - radius,
+      top: position.y - radius,
+      child: Container(
+        width: radius * 2,
+        height: radius * 2,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(
+            colors: [
+              Theme.of(context).primaryColor.withOpacity(0.5),
+              Theme.of(context).primaryColor.withOpacity(0.0)
+            ],
+            stops: [0.2, 1.0],
+          ),
+        ),
+      ),
+    );
+  }
+}
+```
+
+### Music Pin Widget
+```dart
+class MusicPinWidget extends StatefulWidget {
+  final Pin pin;
+  final VoidCallback onTap;
+  
+  const MusicPinWidget({
+    Key? key,
+    required this.pin,
+    required this.onTap,
+  }) : super(key: key);
+  
+  @override
+  _MusicPinWidgetState createState() => _MusicPinWidgetState();
+}
+
+class _MusicPinWidgetState extends State<MusicPinWidget> 
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _bounceAnimation;
+  
+  @override
+  void initState() {
+    super.initState();
     
-    // Update user position
-    public void UpdateUserLocation(string locationJson)
-    {
-        var locationData = JsonUtility.FromJson<LocationData>(locationJson);
-        // Update user marker position...
-    }
+    // Setup bounce animation
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 1000),
+    )..repeat(reverse: true);
     
-    // Send message to Flutter
-    public void SendMessageToFlutter(string eventName, string data)
-    {
-        #if UNITY_ANDROID
-        using (AndroidJavaClass unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
-        {
-            // Android-specific communication...
-        }
-        #elif UNITY_IOS
-        // iOS-specific communication...
-        #endif
+    _bounceAnimation = Tween<double>(
+      begin: 0.0,
+      end: 10.0,
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeInOut,
+    ));
+  }
+  
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          return Transform.translate(
+            offset: Offset(0, -_bounceAnimation.value),
+            child: child,
+          );
+        },
+        child: Container(
+          width: getPinSizeForRarity(widget.pin.rarity),
+          height: getPinSizeForRarity(widget.pin.rarity),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: getPinColorForRarity(widget.pin.rarity).withOpacity(0.5),
+                blurRadius: 10,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: Image.asset(
+            'assets/images/pin_skins/${widget.pin.skin}.png',
+            fit: BoxFit.contain,
+          ),
+        ),
+      ),
+    );
+  }
+  
+  double getPinSizeForRarity(String rarity) {
+    switch (rarity) {
+      case 'common': return 60;
+      case 'uncommon': return 70;
+      case 'rare': return 80;
+      case 'epic': return 90;
+      case 'legendary': return 100;
+      default: return 60;
     }
+  }
+  
+  Color getPinColorForRarity(String rarity) {
+    switch (rarity) {
+      case 'common': return Colors.grey;
+      case 'uncommon': return Colors.green;
+      case 'rare': return Colors.blue;
+      case 'epic': return Colors.purple;
+      case 'legendary': return Colors.orange;
+      default: return Colors.grey;
+    }
+  }
 }
 ```
 
@@ -506,8 +727,8 @@ flutter test --coverage
 
 ### Integration Tests
 - End-to-end user flows
-- Unity-Flutter communication
 - API communication
+- Location-based features
 
 ### Performance Testing
 - Startup time
@@ -518,7 +739,7 @@ flutter test --coverage
 
 ## 📱 Supported Platforms
 - Android 8.0+ (API level 26+)
-- iOS 12.0+
+- iOS 13.0+
 - *Future expansion:* Web version with limited functionality
 
 ---
@@ -534,22 +755,23 @@ flutter test --coverage
 - **Retrofit** for API client generation
 - Custom error handling middleware
 
-### Unity Integration Strategy
-- Limited Unity context to map visualization only
-- Communication through serialized messages
-- Performance optimization through asset bundling
+### Map Visualization Strategy
+- Mapbox GL for 3D-like tilted camera views
+- Custom Flutter animations for pin and aura effects
+- Canvas-based optimizations for handling many pins simultaneously
 
-### Asset Management
-- Aggressive caching for map assets
-- Progressive loading for Unity scenes
-- Offline-first approach for previously visited areas
+### Offline & Performance Optimizations
+- Aggressive caching of map tiles
+- Local storage of previously discovered pins
+- Background location tracking with battery optimizations
+- Lazy loading of distant pins
 
 ---
 
 ## 📈 Roadmap
 
 ### Phase 1: MVP (Current)
-- Basic map visualization with Unity
+- Basic map visualization with pin placement
 - Pin creation and discovery
 - Spotify integration
 - Friend connections
@@ -566,7 +788,7 @@ flutter test --coverage
 - Music communities
 - Collaborative playlists
 - Enhanced sharing capabilities
-- AR pin visualization
+- AR pin visualization (using ARKit/ARCore)
 - Cross-platform messaging
 
 ### Phase 4: Monetization
@@ -580,7 +802,7 @@ flutter test --coverage
 ## 👥 Team & Contributions
 - **Jah**: Project Lead & Architecture
 - **Mason**: Flutter Development
-- **Eric**: Unity Integration
+- **Eric**: Map Visualization & Animations
 - **Isaiah**: Design & UI/UX
 - **Danny**: API Integration & State Management
 

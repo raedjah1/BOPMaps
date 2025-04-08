@@ -3,16 +3,17 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import '../../config/constants.dart';
 import '../../models/music_track.dart';
+import 'package:flutter/foundation.dart';
 
 class SpotifyService {
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   final String _clientId = AppConstants.spotifyClientId;
   final String _redirectUri = AppConstants.spotifyRedirectUri;
   
-  // Spotify API endpoints
-  static const String _authEndpoint = 'https://accounts.spotify.com/authorize';
-  static const String _tokenEndpoint = 'https://accounts.spotify.com/api/token';
-  static const String _apiBaseUrl = 'https://api.spotify.com/v1';
+  // Spotify API endpoints from AppConstants
+  static final String _authEndpoint = AppConstants.spotifyAuthUrl;
+  static final String _tokenEndpoint = AppConstants.spotifyTokenUrl;
+  static final String _apiBaseUrl = AppConstants.spotifyApiBaseUrl;
   
   // Storage keys
   static const String _accessTokenKey = 'spotify_access_token';
@@ -24,6 +25,12 @@ class SpotifyService {
     try {
       final accessToken = await _secureStorage.read(key: _accessTokenKey);
       if (accessToken == null) return false;
+      
+      // If this is a mock token from dev mode, just assume it's connected
+      if (kDebugMode && accessToken.startsWith('dev_token_')) {
+        print('Debug mode: Using cached development token for Spotify connection');
+        return true;
+      }
       
       // Check if token is expired
       final expiryTimeString = await _secureStorage.read(key: _expiryTimeKey);
@@ -44,13 +51,7 @@ class SpotifyService {
   
   // Get authorization URL for OAuth flow
   String getAuthorizationUrl() {
-    final scopes = [
-      'user-read-private',
-      'user-read-email',
-      'user-library-read',
-      'user-top-read',
-      'streaming',
-    ];
+    final scopes = AppConstants.spotifyScopes;
     
     final params = {
       'client_id': _clientId,
@@ -81,7 +82,7 @@ class SpotifyService {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: body,
+        body: Uri(queryParameters: body).query,
       );
       
       if (response.statusCode == 200) {
@@ -116,6 +117,15 @@ class SpotifyService {
       final refreshToken = await _secureStorage.read(key: _refreshTokenKey);
       if (refreshToken == null) return false;
       
+      // If this is a mock token from dev mode, just simulate a successful refresh
+      if (kDebugMode && refreshToken.startsWith('dev_refresh_token_')) {
+        print('Debug mode: Simulating successful token refresh for development');
+        // Extend the expiry time without actually making an API call
+        final expiryTime = DateTime.now().add(const Duration(days: 7));
+        await _secureStorage.write(key: _expiryTimeKey, value: expiryTime.toIso8601String());
+        return true;
+      }
+      
       final body = {
         'grant_type': 'refresh_token',
         'refresh_token': refreshToken,
@@ -127,7 +137,7 @@ class SpotifyService {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: body,
+        body: Uri(queryParameters: body).query,
       );
       
       if (response.statusCode == 200) {
@@ -143,6 +153,7 @@ class SpotifyService {
         );
         return true;
       } else {
+        print('Token refresh failed with status ${response.statusCode}: ${response.body}');
         return false;
       }
     } catch (e) {

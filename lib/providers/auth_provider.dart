@@ -178,6 +178,54 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
   }
   
+  // Mock login for testing and development
+  Future<bool> simulateLogin({
+    required String userId,
+    required String name,
+    required String email,
+    String? profilePic,
+    String bio = 'Simulated login user',
+  }) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+    
+    try {
+      // Simulate a slight delay
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      // Create a mock user for testing
+      _currentUser = User(
+        id: int.tryParse(userId) ?? 1,
+        username: name,
+        email: email,
+        isVerified: true,
+        profilePicUrl: profilePic,
+        bio: bio,
+        createdAt: DateTime.now(),
+        favoriteGenres: ['Pop', 'Rock', 'Hip-Hop'],
+        connectedServices: {'spotify': true},
+      );
+      
+      // Set a mock token
+      _token = 'mock_token_${DateTime.now().millisecondsSinceEpoch}';
+      _refreshToken = 'mock_refresh_token_${DateTime.now().millisecondsSinceEpoch}';
+      
+      // Store the mock data
+      await _secureStorage.write(key: AppConstants.tokenKey, value: _token);
+      await _secureStorage.write(key: AppConstants.refreshTokenKey, value: _refreshToken);
+      await _storeUserData();
+      
+      return true;
+    } catch (e) {
+      _error = 'Simulated login error: $e';
+      return false;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+  
   // Sign in with Google
   Future<bool> signInWithGoogle() async {
     _isLoading = true;

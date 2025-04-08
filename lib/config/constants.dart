@@ -1,21 +1,50 @@
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class AppConstants {
-  // API endpoints
+  // Server API endpoints
   static String get baseApiUrl {
     // Make this resilient to missing dotenv by providing a fallback
     try {
-      return dotenv.env['API_BASE_URL'] ?? 'https://api.bopmaps.com';
+      return dotenv.env['API_BASE_URL'] ?? 'http://127.0.0.1:8000/api';
     } catch (e) {
       // If dotenv is not initialized, return default
-      return 'https://api.bopmaps.com';
+      return 'http://127.0.0.1:8000/api';
     }
   }
   
-  static const String authEndpoint = '/auth';
-  static const String pinsEndpoint = '/pins';
+  // Main API sections
+  static const String usersAuthBase = '/users/auth';
+  static const String musicBase = '/music';
+  static const String pinsBase = '/pins';
+  static const String profilesBase = '/profiles';
+  
+  // For backwards compatibility with existing code
+  static const String authEndpoint = '/users/auth';
   static const String usersEndpoint = '/users';
-  static const String musicEndpoint = '/music';
+  static const String pinsEndpoint = '/pins';
+  
+  // Authentication endpoints
+  static const String loginEndpoint = '$usersAuthBase/token/';
+  static const String refreshEndpoint = '$usersAuthBase/token/refresh/';
+  static const String logoutEndpoint = '$usersAuthBase/logout/';
+  static const String registerEndpoint = '$usersAuthBase/register/';
+  static const String verifyEndpoint = '$usersAuthBase/verify/';
+  
+  // User endpoints
+  static const String userProfileEndpoint = '/users/me/';
+  static const String userSettingsEndpoint = '/users/settings/';
+  
+  // Django Music service endpoints
+  static const String spotifyAuthEndpoint = '$musicBase/auth/spotify/';
+  static const String spotifyCallbackEndpoint = '$musicBase/auth/spotify/callback/';
+  static const String spotifyCallbackHandlerEndpoint = '$musicBase/auth/callback/';
+  static const String connectedServicesEndpoint = '$musicBase/connected_services/';
+  
+  // Pin endpoints
+  static const String allPinsEndpoint = '$pinsBase/';
+  static const String nearbyPinsEndpoint = '$pinsBase/nearby/';
+  static const String userPinsEndpoint = '$pinsBase/user/';
+  static const String createPinEndpoint = '$pinsBase/create/';
   
   // Map settings
   static const double defaultZoom = 15.0;
@@ -46,7 +75,13 @@ class AppConstants {
   static const int maxAudioPreviewDuration = 30; // in seconds
   static const int maxPinDescriptionLength = 200; // characters
   
-  // Music services
+  // ===== SPOTIFY API CONFIGURATION =====
+  // Spotify API Constants
+  static const String spotifyApiBaseUrl = 'https://api.spotify.com/v1';
+  static const String spotifyAuthBaseUrl = 'https://accounts.spotify.com';
+  static const String spotifyAuthUrl = '$spotifyAuthBaseUrl/authorize';
+  static const String spotifyTokenUrl = '$spotifyAuthBaseUrl/api/token';
+  
   static String get spotifyClientId {
     try {
       return dotenv.env['SPOTIFY_CLIENT_ID'] ?? 'placeholder_spotify_client_id';
@@ -55,11 +90,19 @@ class AppConstants {
     }
   }
   
+  static String get spotifyClientSecret {
+    try {
+      return dotenv.env['SPOTIFY_CLIENT_SECRET'] ?? 'placeholder_spotify_client_secret';
+    } catch (e) {
+      return 'placeholder_spotify_client_secret';
+    }
+  }
+  
   static String get spotifyRedirectUri {
     try {
-      return dotenv.env['SPOTIFY_REDIRECT_URI'] ?? 'com.bopmaps://callback';
+      return dotenv.env['SPOTIFY_REDIRECT_URI'] ?? 'http://127.0.0.1:8000/api/music/callback';
     } catch (e) {
-      return 'com.bopmaps://callback';
+      return 'http://127.0.0.1:8000/api/music/callback';
     }
   }
   

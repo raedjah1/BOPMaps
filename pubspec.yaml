@@ -11,7 +11,7 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.5
   provider: ^6.0.5
-  http: ^0.13.5
+  http: ^1.3.0
   shared_preferences: ^2.1.1
   flutter_dotenv: ^5.0.2
   firebase_core: ^2.13.0
@@ -45,6 +45,11 @@ dependencies:
   share_plus: ^7.0.1
   lottie: ^2.3.2
   flutter_web_auth: ^0.5.0
+  # Added for modern 2.5D map implementation
+  flutter_map: ^6.0.1
+  latlong2: ^0.9.0
+  vector_math: ^2.1.4
+  flutter_map_marker_cluster: ^1.3.6
 
 dev_dependencies:
   flutter_test:
@@ -60,7 +65,9 @@ flutter:
   assets:
     - assets/images/
     - assets/icons/
-    # - .env  # Uncommented since we've created this file
+    - assets/fonts/
+    - .env  # Uncommented since we've created this file
+    # Add other assets here
 
   # Uncommented font references since we've added the font files
   # fonts:

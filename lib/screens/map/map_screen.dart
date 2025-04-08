@@ -15,6 +15,8 @@ import '../../widgets/common/empty_state_widget.dart';
 // import '../../widgets/map/shimmer_pin_widget.dart';
 import '../../widgets/bottomsheets/create_pin_bottomsheet.dart';
 import '../../widgets/animations/fade_in_animation.dart';
+import '../../widgets/map/flutter_map_widget.dart';
+import '../../widgets/map/map_controls_widget.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({Key? key}) : super(key: key);
@@ -33,8 +35,7 @@ class _MapScreenState extends State<MapScreen> {
     // Force refresh map data on init
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final mapProvider = Provider.of<MapProvider>(context, listen: false);
-      // Temporarily disable refreshing pins until mapbox is setup
-      // mapProvider.refreshPins();
+      mapProvider.refreshPins();
     });
   }
 
@@ -43,46 +44,58 @@ class _MapScreenState extends State<MapScreen> {
     return Consumer2<MapProvider, AuthProvider>(
       builder: (context, mapProvider, authProvider, child) {
         return Scaffold(
-          body: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.map, size: 100, color: Colors.grey),
-                const SizedBox(height: 20),
-                Text(
-                  "Map Temporarily Unavailable",
-                  style: Theme.of(context).textTheme.headlineMedium,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 10),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 40),
-                  child: Text(
-                    "The Mapbox dependency is temporarily disabled to allow the app to run. Please re-enable mapbox_gl in pubspec.yaml to use the full map functionality.",
-                    style: Theme.of(context).textTheme.bodyMedium,
-                    textAlign: TextAlign.center,
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            title: const Text("BOPMaps", style: TextStyle(fontWeight: FontWeight.bold)),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.settings),
+                tooltip: 'Settings',
+                onPressed: () {
+                  Navigator.pushNamed(context, '/settings');
+                },
+              ),
+            ],
+          ),
+          body: Stack(
+            children: [
+              // Main map widget (modular component)
+              FlutterMapWidget(
+                mapProvider: mapProvider,
+                onPinTap: _showPinDetails,
+              ),
+              
+              // Map controls (zoom, location button, etc)
+              MapControlsWidget(
+                onLocationButtonTap: () async {
+                  // Will be implemented in the MapControlsWidget
+                },
+              ),
+              
+              // Loading indicator 
+              if (mapProvider.isLoading)
+                const Center(
+                  child: Card(
+                    color: Colors.white,
+                    elevation: 4,
+                    child: Padding(
+                      padding: EdgeInsets.all(16.0),
+                      child: CircularProgressIndicator(),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 30),
-                ElevatedButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text("Please re-enable the Mapbox dependency to use this feature"),
-                      ),
-                    );
-                  },
-                  child: const Text("Simulate Refresh"),
-                ),
-              ],
-            ),
+            ],
           ),
           
           // Bottom navigation
           bottomNavigationBar: _buildBottomNavBar(context),
           
           // Floating action button for dropping pins
-          floatingActionButton: _buildFloatingActionButton(context, mapProvider),
+          floatingActionButton: FloatingActionButton(
+            onPressed: _showCreatePinBottomSheet,
+            child: const Icon(Icons.add_location),
+          ),
           floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
         );
       },
@@ -124,81 +137,94 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
   
-  // Build floating action button
-  Widget _buildFloatingActionButton(BuildContext context, MapProvider mapProvider) {
-    return FloatingActionButton(
-      onPressed: () {
-        // Show pin creation bottom sheet
-        _showCreatePinBottomSheet(context, mapProvider);
-      },
-      child: const Icon(Icons.add_location),
+  // Show pin details
+  void _showPinDetails(Map<String, dynamic> pin) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => _buildPinDetailsModal(pin),
+    );
+  }
+  
+  // Build pin details modal
+  Widget _buildPinDetailsModal(Map<String, dynamic> pin) {
+    // Placeholder implementation
+    return Container(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            pin['title'] ?? 'Unknown Track',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            pin['artist'] ?? 'Unknown Artist',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              ElevatedButton.icon(
+                icon: const Icon(Icons.add_circle_outline),
+                label: const Text('Collect'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Collection feature coming soon')),
+                  );
+                },
+              ),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.share),
+                label: const Text('Share'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Share feature coming soon')),
+                  );
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
   
   // Show create pin bottom sheet
-  void _showCreatePinBottomSheet(BuildContext context, MapProvider mapProvider) {
+  void _showCreatePinBottomSheet() {
     showModalBottomSheet(
       context: context,
+      backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      isDismissible: true,
       builder: (context) => CreatePinBottomsheet(
         onCreateRegular: () {
           Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Map functionality is temporarily disabled - Single Track Pin"),
-            ),
-          );
+          Navigator.pushNamed(context, '/track_select', arguments: {
+            'pinType': 'regular',
+          });
         },
         onCreateCustom: () {
           Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Map functionality is temporarily disabled - Custom Music Pin"),
-            ),
-          );
+          Navigator.pushNamed(context, '/track_select', arguments: {
+            'pinType': 'custom',
+          });
         },
         onCreatePlaylist: () {
           Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Map functionality is temporarily disabled - Playlist Pin"),
-            ),
-          );
+          Navigator.pushNamed(context, '/track_select', arguments: {
+            'pinType': 'playlist',
+          });
         },
         onClose: () {
           Navigator.pop(context);
-        },
-      ),
-    );
-  }
-  
-  // Show pin details (stubbed)
-  void _showPinDetails(BuildContext context, Map<String, dynamic> pin) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => TrackPreviewModal(
-        pin: pin,
-        isCollected: false,
-        onCollect: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-              content: Text("Collection functionality is temporarily disabled"),
-                  ),
-                );
-              },
-        onShare: () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Sharing functionality is temporarily disabled"),
-            ),
-          );
         },
       ),
     );

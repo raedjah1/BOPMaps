@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../config/themes.dart';
+import '../../utils/auth_manager.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({Key? key}) : super(key: key);
@@ -14,7 +15,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _notificationsEnabled = true;
   bool _locationEnabled = true;
   bool _darkModeEnabled = false;
+  bool _isTestingConnection = false;
+  Map<String, dynamic>? _connectionTestResult;
   
+  // Auth manager instance
+  final AuthManager _authManager = AuthManager();
+
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
@@ -141,6 +147,70 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SnackBar(content: Text('Audio settings coming soon')),
               );
             },
+          ),
+          
+          const Divider(),
+          
+          // Developer Options section
+          _buildSectionHeader(context, 'Developer Options'),
+          
+          ListTile(
+            leading: const Icon(Icons.developer_mode),
+            title: const Text('Test Django Connection'),
+            subtitle: _connectionTestResult != null
+                ? Text(
+                    _connectionTestResult!['success']
+                        ? '✅ Connected (${_connectionTestResult!['responseTime']} ms)'
+                        : '❌ Failed: ${_connectionTestResult!['error']}',
+                    style: TextStyle(
+                      color: _connectionTestResult!['success'] ? Colors.green : Colors.red,
+                    ),
+                  )
+                : const Text('Check if backend is reachable'),
+            trailing: _isTestingConnection
+                ? const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh),
+            onTap: _isTestingConnection
+                ? null
+                : () async {
+                    setState(() {
+                      _isTestingConnection = true;
+                      _connectionTestResult = null;
+                    });
+                    
+                    try {
+                      final result = await _authManager.testBackendConnection();
+                      
+                      setState(() {
+                        _connectionTestResult = result;
+                        _isTestingConnection = false;
+                      });
+                      
+                      // Show a snackbar with the result
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            result['success']
+                                ? 'Connected to Django backend! Status: ${result['statusCode']}'
+                                : 'Failed to connect: ${result['error']}',
+                          ),
+                          backgroundColor: result['success'] ? Colors.green : Colors.red,
+                        ),
+                      );
+                    } catch (e) {
+                      setState(() {
+                        _connectionTestResult = {
+                          'success': false,
+                          'error': e.toString(),
+                        };
+                        _isTestingConnection = false;
+                      });
+                    }
+                  },
           ),
           
           const Divider(),

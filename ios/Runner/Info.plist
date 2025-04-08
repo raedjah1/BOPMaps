@@ -45,5 +45,24 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>BOPMaps needs access to your location to show music pins near you and to place new pins.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>BOPMaps needs access to your location to show music pins near you and to place new pins even when the app is in the background.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>BOPMaps needs access to your location to show music pins near you and to place new pins.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.bopmaps.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>bopmaps</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

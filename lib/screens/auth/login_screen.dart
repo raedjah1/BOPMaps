@@ -7,6 +7,8 @@ import '../../config/themes.dart';
 import '../../widgets/buttons/secondary_button.dart';
 import '../../widgets/common/localized_text.dart';
 import '../../utils/app_strings.dart';
+import '../../services/music/spotify_service.dart';
+import '../../services/api/django_auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({Key? key}) : super(key: key);
@@ -31,19 +33,15 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   
   // Enhanced color animation for music visualizer with more vibrant colors
   final List<Color> _visualizerColors = [
-    const Color(0xFFFF80AB), // Soft bubblegum pink
-    const Color(0xFF4DD0E1), // Light turquoise
-    const Color(0xFF00E5FF), // Neon cyan
-    const Color(0xFFFF4081), // Vibrant neon pink
-    const Color(0xFFBA68C8), // Light orchid purple
-    const Color(0xFF82B1FF), // Dreamy sky blue
-    const Color(0xFFF06292), // Muted rose-pink
-    const Color(0xFF80DEEA), // Soft aqua
-    const Color(0xFFCE93D8), // Soft lavender
-    const Color(0xFF64B5F6), // Light modern blue
-    const Color(0xFFD1C4E9), // Light lilac
-    const Color(0xFFA7BFFF), // Periwinkle blue
-    const Color(0xFFFF80AB), // Back to soft pink
+    const Color(0xFFFF80AB).withOpacity(0.85), // Soft bubblegum pink (slightly less bright)
+    const Color(0xFFBA68C8).withOpacity(0.85), // Light orchid purple
+    const Color(0xFF80DEEA).withOpacity(0.85), // Soft aqua
+    const Color(0xFFFF4081).withOpacity(0.85), // Vibrant neon pink
+    const Color(0xFFA7BFFF).withOpacity(0.85), // Periwinkle blue
+    const Color(0xFFF06292).withOpacity(0.85), // Muted rose-pink
+    const Color(0xFFCE93D8).withOpacity(0.85), // Soft lavender
+    const Color(0xFF00E5FF).withOpacity(0.85), // Neon cyan
+    const Color(0xFFFF80AB).withOpacity(0.85), // Back to soft pink
   ];
   
   @override
@@ -79,18 +77,97 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     setState(() => _isSpotifyLoading = true);
     
     try {
-      // Temporarily simplified for development phase
-      await Future.delayed(const Duration(seconds: 1));
+      // Get the auth provider
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
       
-      // Navigate directly to the main screen for now
+      // Use Django backend for Spotify authentication
+      final djangoAuthService = DjangoAuthService();
+      
+      // Show a loading message
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Connecting to Spotify...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      
+      print('Starting Spotify authentication flow...');
+      // Initiate authentication flow with Django backend
+      final success = await djangoAuthService.authenticateWithSpotify();
+      
+      if (!success) {
+        throw Exception('Authentication failed or was cancelled');
+      }
+      
+      print('Spotify authentication successful, getting user profile...');
+      
+      // Show success message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Successfully connected to Spotify'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      
+      // Get user profile from backend
+      final userProfile = await djangoAuthService.getUserProfile();
+      
+      if (userProfile == null) {
+        throw Exception('Failed to retrieve user profile');
+      }
+      
+      print('User profile retrieved: ${userProfile['username'] ?? 'Unknown user'}');
+      
+      // Update auth state with real user data if available, otherwise fall back to simulated login
+      if (userProfile.containsKey('id') && userProfile.containsKey('username')) {
+        print('Logging in with real user data from Spotify');
+        await authProvider.simulateLogin(
+          userId: userProfile['id'].toString(),
+          name: userProfile['username'] ?? 'Spotify User',
+          email: userProfile['email'] ?? 'spotify_user@example.com',
+          profilePic: userProfile['profile_pic_url'],
+          bio: userProfile['bio'] ?? 'Logged in with Spotify',
+        );
+      } else {
+        // Fallback to mock login during development
+        print('Using fallback mock login (no user data returned from backend)');
+        await authProvider.simulateLogin(
+          userId: 'spotify_user_123',
+          name: 'Spotify User',
+          email: 'spotify_user@example.com',
+        );
+      }
+      
       if (!mounted) return;
       
-      // Navigate to the home/map screen directly
+      // Navigate to the map screen
+      print('Navigating to map screen...');
       Navigator.of(context).pushReplacementNamed('/map');
     } catch (e) {
       if (!mounted) return;
       
-      // Show error message
+      print('Spotify authentication error: $e');
+      
+      // Show error message in a snackbar
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Spotify login failed: ${e.toString()}'),
+          backgroundColor: Colors.red.shade700,
+          duration: const Duration(seconds: 4),
+          action: SnackBarAction(
+            label: 'Dismiss',
+            textColor: Colors.white,
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            },
+          ),
+        ),
+      );
+      
+      // Also show the error dialog for more details
       _showSignInErrorDialog('Spotify', e.toString());
     } finally {
       if (mounted) {
@@ -300,18 +377,12 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
         child: AnimatedBuilder(
           animation: _animationController,
           builder: (context, child) {
-            // Get animated color based on animation value - Using a SLOWER transition for the expanded palette
-            final colorIndex = (_animationController.value * (_visualizerColors.length - 1) * 0.15).floor(); // Even slower color transition
-            final colorPercent = (_animationController.value * (_visualizerColors.length - 1) * 0.15) - colorIndex;
+            // Create multiple color transitions to ensure color mixing
+            final primaryColorIndex = (_animationController.value * (_visualizerColors.length - 1) * 0.1).floor();
+            final secondaryColorIndex = (primaryColorIndex + 2) % _visualizerColors.length;
+            final tertiaryColorIndex = (primaryColorIndex + 4) % _visualizerColors.length;
             
-            final int safeColorIndex = colorIndex < _visualizerColors.length - 1 ? colorIndex : _visualizerColors.length - 2;
-            final int nextColorIndex = safeColorIndex + 1;
-            
-            final currentColor = Color.lerp(
-              _visualizerColors[safeColorIndex], 
-              _visualizerColors[nextColorIndex], 
-              colorPercent,
-            )!.withOpacity(0.8); // Slightly more vibrant
+            final primaryColorPercent = (_animationController.value * (_visualizerColors.length - 1) * 0.1) - primaryColorIndex;
             
             return Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -329,28 +400,53 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                   // Make some bars taller than others for visual interest
                   final multiplier = 1.0 + ((index % 4) * 0.18); // More distinct height variation
                   
-                  // Add slight color variation based on index
-                  final indexColorVariation = (index % 6) * 0.05;
-                  final colorVariation = math.max(0.0, math.min(1.0, colorPercent + indexColorVariation));
-                  final indexBasedColor = Color.lerp(
-                    _visualizerColors[safeColorIndex], 
-                    _visualizerColors[nextColorIndex], 
-                    colorVariation,
-                  )!;
+                  // Group bars by sections to create visible color clusters
+                  int colorGroup = (index ~/ 4) % 3; // Create groups of 4 bars each cycling through 3 color groups
+                  Color baseColor;
+                  
+                  if (colorGroup == 0) {
+                    // First color group - main transition color
+                    final nextPrimaryIndex = (primaryColorIndex + 1) % _visualizerColors.length;
+                    baseColor = Color.lerp(
+                      _visualizerColors[primaryColorIndex],
+                      _visualizerColors[nextPrimaryIndex],
+                      primaryColorPercent,
+                    )!;
+                  } else if (colorGroup == 1) {
+                    // Second color group - secondary color
+                    final nextSecondaryIndex = (secondaryColorIndex + 1) % _visualizerColors.length;
+                    baseColor = Color.lerp(
+                      _visualizerColors[secondaryColorIndex],
+                      _visualizerColors[nextSecondaryIndex],
+                      primaryColorPercent,
+                    )!;
+                  } else {
+                    // Third color group - tertiary color
+                    final nextTertiaryIndex = (tertiaryColorIndex + 1) % _visualizerColors.length;
+                    baseColor = Color.lerp(
+                      _visualizerColors[tertiaryColorIndex],
+                      _visualizerColors[nextTertiaryIndex],
+                      primaryColorPercent,
+                    )!;
+                  }
+                  
+                  // Add slight variation within groups
+                  final withinGroupVariation = (index % 4) * 0.06;
+                  final finalOpacity = 0.5 + (height / 130) * 0.4; // Less bright at shorter heights
                   
                   return AnimatedContainer(
-                    duration: const Duration(milliseconds: 350), // Longer for smoother transitions
-                    width: 2.6, // Slightly thinner for more elegant look
+                    duration: const Duration(milliseconds: 350),
+                    width: 2.6,
                     height: height * multiplier,
                     decoration: BoxDecoration(
-                      // Use interpolated color with transparency
-                      color: indexBasedColor.withOpacity(0.6 + (height / 130) * 0.4),
+                      // Use interpolated color with balanced opacity
+                      color: baseColor.withOpacity(finalOpacity),
                       borderRadius: BorderRadius.circular(4),
                       boxShadow: [
                         BoxShadow(
-                          color: indexBasedColor.withOpacity(0.6), // Enhanced glow
-                          blurRadius: 10, // Increased glow
-                          spreadRadius: 0.8,
+                          color: baseColor.withOpacity(0.4), // Reduced glow intensity
+                          blurRadius: 8,
+                          spreadRadius: 0.5,
                         ),
                       ],
                     ),
@@ -443,14 +539,14 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               ),
             ),
             
-            // Map pin element with improved design
+            // Map pin element with improved design - now with black background
             Positioned(
               top: 12,
               child: Container(
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Colors.black, // Changed to black for consistency
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
@@ -459,6 +555,10 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                       offset: const Offset(0, 2),
                     ),
                   ],
+                  border: Border.all(
+                    color: const Color(0xFFFF80AB).withOpacity(0.6), // Pink border to match main circle
+                    width: 1.5,
+                  ),
                 ),
                 child: const Icon(
                   Icons.location_on,
@@ -489,7 +589,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               ),
             ),
             
-            // Small sound wave arcs with improved animation
+            // Small sound wave arcs with animated effect (restored)
             ...List.generate(3, (index) {
               final size = 160.0 + (index * 20.0);
               return Positioned(
@@ -524,57 +624,40 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
         ),
         const SizedBox(height: 24),
         
-        // App name with improved contrast using black, white and pink
-        ShaderMask(
-          shaderCallback: (bounds) {
-            return LinearGradient(
-              colors: [
-                Colors.white.withOpacity(0.95),
-                Colors.white,
-                const Color(0xFFFF80AB), // Pink accent
-                Colors.white,
-                Colors.white.withOpacity(0.95),
-              ],
-              stops: const [0.0, 0.3, 0.5, 0.7, 1.0],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              tileMode: TileMode.clamp,
-            ).createShader(bounds);
-          },
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              // Shadow for depth
-              Text(
-                'BOPMaps',
-                style: TextStyle(
-                  fontSize: 48,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black.withOpacity(0.6),
-                  letterSpacing: 2,
-                  height: 1.0,
-                  shadows: [
-                    Shadow(
-                      color: Colors.black.withOpacity(0.5),
-                      offset: const Offset(2, 2),
-                      blurRadius: 4,
-                    ),
-                  ],
-                ),
+        // App name with solid white color for more professional look
+        Stack(
+          alignment: Alignment.center,
+          children: [
+            // Shadow for depth
+            Text(
+              'BOPMaps',
+              style: TextStyle(
+                fontSize: 48,
+                fontWeight: FontWeight.bold,
+                color: Colors.black.withOpacity(0.6),
+                letterSpacing: 2,
+                height: 1.0,
+                shadows: [
+                  Shadow(
+                    color: Colors.black.withOpacity(0.5),
+                    offset: const Offset(2, 2),
+                    blurRadius: 4,
+                  ),
+                ],
               ),
-              // Main text
-              const Text(
-                'BOPMaps',
-                style: TextStyle(
-                  fontSize: 48,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  letterSpacing: 2,
-                  height: 1.0,
-                ),
+            ),
+            // Main text with solid white color
+            const Text(
+              'BOPMaps',
+              style: TextStyle(
+                fontSize: 48,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+                letterSpacing: 2,
+                height: 1.0,
               ),
-            ],
-          ),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         

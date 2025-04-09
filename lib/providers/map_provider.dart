@@ -233,6 +233,73 @@ class MapProvider with ChangeNotifier {
     notifyListeners();
   }
   
+  // Add a new pin at the specified location
+  Future<Map<String, dynamic>?> addPin({
+    required double latitude,
+    required double longitude,
+    required String title,
+    required String artist,
+    required String trackUrl,
+    String rarity = 'Common',
+  }) async {
+    try {
+      // Generate a unique ID
+      final id = DateTime.now().millisecondsSinceEpoch.toString();
+      
+      // Create new pin data
+      final newPin = {
+        'id': id,
+        'title': title,
+        'artist': artist,
+        'track_url': trackUrl,
+        'latitude': latitude,
+        'longitude': longitude,
+        'rarity': rarity,
+        'is_collected': false,
+      };
+      
+      // In a real implementation, you would send this to your API
+      // await _pinsService.addPin(newPin);
+      
+      // Add to local pin collection
+      _pins.add(newPin);
+      
+      // Set this as the selected pin
+      _selectedPin = newPin;
+      
+      notifyListeners();
+      
+      return newPin;
+    } catch (e) {
+      _setError('Error adding pin: $e');
+      return null;
+    }
+  }
+  
+  // Determine the rarity of a pin based on various factors
+  String determinePinRarity() {
+    // This could use various factors like:
+    // - User's current level or status
+    // - Time of day
+    // - Special events
+    // - Location-based factors
+    // - Random chance
+    
+    final random = DateTime.now().millisecond % 100; // 0-99
+    
+    if (random < 50) {
+      return 'Common';
+    } else if (random < 75) {
+      return 'Uncommon';
+    } else if (random < 90) {
+      return 'Rare';
+    } else if (random < 98) {
+      return 'Epic';
+    } else {
+      return 'Legendary';
+    }
+  }
+  
   @override
   void dispose() {
     _positionStream?.cancel();

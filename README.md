@@ -810,3 +810,36 @@ flutter test --coverage
 
 ## 📜 License
 [MIT License](LICENSE)
+
+## Features
+
+- Interactive map interface for discovering music locations
+- User authentication and profile management
+- Pin creation and management
+- Social features (following, collections)
+- Theme customization (light/dark mode)
+
+## Recent Updates
+
+### Profile Screen (v1.2.0)
+- Added a modern, interactive profile screen with:
+  - Custom sliver app bar with stretch effect
+  - Profile header with gradient background
+  - Stats section showing pins, collections, and social metrics
+  - Tabbed interface for My Pins, Activity, and Collections
+  - Consistent theme integration using AppTheme colors
+  - Responsive design with smooth animations
+
+### Theme Consistency
+- Implemented centralized theme management using AppTheme class
+- Consistent color usage across all screens:
+  - Primary color: #6200EE (Purple)
+  - Secondary color: #03DAC6 (Teal)
+  - Aura color: #BB86FC (Light Purple)
+  - Surface colors for cards and backgrounds
+  - Proper contrast ratios for text and icons
+- Support for both light and dark themes
+- Gradient effects using theme colors
+- Proper opacity handling for overlays and shadows
+
+## Getting Started

@@ -5,6 +5,7 @@ import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
 import 'package:flutter_map_marker_popup/flutter_map_marker_popup.dart';
 import 'dart:math' as math;
 import 'package:vector_math/vector_math_64.dart' as vector;
+import 'dart:async';
 
 import '../../config/constants.dart';
 import '../../providers/map_provider.dart';
@@ -15,6 +16,8 @@ import 'map_layers/trees_layer.dart';
 import 'map_layers/osm_buildings_layer.dart';
 import 'map_layers/osm_roads_layer.dart';
 import 'map_layers/osm_data_processor.dart';
+import 'map_layers/osm_water_features_layer.dart';
+import 'map_layers/osm_parks_layer.dart';
 import 'user_location_marker.dart';
 import 'map_styles.dart';
 
@@ -63,6 +66,18 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
   // Flag to handle fallback tiles
   bool _isUsingFallbackTiles = false;
   
+  // Track if map is currently moving for responsive layer updates
+  bool _isMapMoving = false;
+  double _currentZoom = AppConstants.defaultZoom;
+  LatLng _currentCenter = LatLng(AppConstants.defaultLatitude, AppConstants.defaultLongitude);
+  LatLngBounds _visibleBounds = LatLngBounds(
+    LatLng(AppConstants.defaultLatitude - 0.05, AppConstants.defaultLongitude - 0.05),
+    LatLng(AppConstants.defaultLatitude + 0.05, AppConstants.defaultLongitude + 0.05)
+  );
+  
+  // Timer to debounce map movement for performance
+  Timer? _mapMovementDebounceTimer;
+  
   @override
   void initState() {
     super.initState();
@@ -86,21 +101,7 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
     _animationController.forward();
     
     // Listen for map events
-    _mapController.mapEventStream.listen((event) {
-      // We can detect map initialization by any event
-      if (_isFirstLoad) {
-        _isFirstLoad = false;
-        setState(() {
-          _isMapInitialized = true;
-          _determineDetailLevel();
-        });
-      }
-      
-      // Update detail level when map moves
-      if (event is MapEventMoveEnd) {
-        _determineDetailLevel();
-      }
-    });
+    _mapController.mapEventStream.listen(_handleMapEvent);
   }
   
   @override
@@ -108,7 +109,79 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
     _animationController.dispose();
     _moveAnimationController?.dispose();
     _mapController.dispose();
+    _mapMovementDebounceTimer?.cancel();
     super.dispose();
+  }
+  
+  // Handle map events with enhanced responsiveness
+  void _handleMapEvent(MapEvent event) {
+    // First load and initialization
+    if (_isFirstLoad) {
+      _isFirstLoad = false;
+      setState(() {
+        _isMapInitialized = true;
+        _determineDetailLevel();
+      });
+    }
+    
+    // Track current map state for responsive layer updates
+    _currentZoom = _mapController.camera.zoom;
+    _currentCenter = _mapController.camera.center;
+    _visibleBounds = _mapController.camera.visibleBounds;
+    
+    // Differentiate between event types for proper response
+    if (event is MapEventMoveStart) {
+      // Map movement started
+      setState(() {
+        _isMapMoving = true;
+      });
+    } else if (event is MapEventMove) {
+      // Continuously update during movement (throttled for performance)
+      _throttledMapUpdate();
+    } else if (event is MapEventMoveEnd) {
+      // Movement ended
+      setState(() {
+        _isMapMoving = false;
+        _determineDetailLevel();
+      });
+    } else if (event is MapEventRotateStart || event is MapEventRotateEnd || event is MapEventRotate) {
+      // Handle rotation events
+      setState(() {}); // Simple redraw
+    } 
+    // We don't have specific zoom event types in newer flutter_map, use move events instead
+  }
+  
+  // Throttle updates during continuous map movements for better performance
+  void _throttledMapUpdate() {
+    if (_mapMovementDebounceTimer?.isActive ?? false) return;
+    
+    _mapMovementDebounceTimer = Timer(const Duration(milliseconds: 100), () {
+      if (mounted) {
+        setState(() {
+          // This forces a redraw of the map layers with current bounds/zoom
+        });
+      }
+    });
+  }
+  
+  // Determine building and POI detail level based on zoom
+  void _determineDetailLevel() {
+    final zoom = _mapController.camera.zoom;
+    int newLevel;
+    
+    if (zoom < 14.0) {
+      newLevel = 1; // Low detail
+    } else if (zoom < 16.0) {
+      newLevel = 2; // Medium detail
+    } else {
+      newLevel = 3; // High detail
+    }
+    
+    if (_buildingDetailLevel != newLevel) {
+      setState(() {
+        _buildingDetailLevel = newLevel;
+      });
+    }
   }
   
   @override
@@ -236,61 +309,54 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
                                       
                                       // Either use real OSM data or decorative layers based on the toggle
                                       if (_useRealOSMData) ...[
+                                        // Water features layer - should be rendered first (beneath everything)
+                                        OSMWaterFeaturesLayer(
+                                          tiltFactor: _tiltAnimation.value,
+                                          zoomLevel: _currentZoom,
+                                          isMapMoving: _isMapMoving,
+                                          visibleBounds: _visibleBounds,
+                                          waterColor: MapStyles.primaryColor.withOpacity(0.5), // Use primary color for music theme
+                                        ),
+                                        
+                                        // Parks and vegetation layer - rendered before roads and buildings
+                                        OSMParksLayer(
+                                          tiltFactor: _tiltAnimation.value,
+                                          zoomLevel: _currentZoom,
+                                          isMapMoving: _isMapMoving,
+                                          visibleBounds: _visibleBounds,
+                                        ),
+                                        
                                         // Real OSM Roads Layer with 2.5D effects
                                         OSMRoadsLayer(
                                           tiltFactor: _tiltAnimation.value,
-                                          zoomLevel: _isMapInitialized ? _mapController.camera.zoom : AppConstants.defaultZoom,
-                                          visibleBounds: _isMapInitialized 
-                                              ? _mapController.camera.visibleBounds
-                                              : LatLngBounds(
-                                                  LatLng(
-                                                    AppConstants.defaultLatitude - 0.05, 
-                                                    AppConstants.defaultLongitude - 0.05,
-                                                  ),
-                                                  LatLng(
-                                                    AppConstants.defaultLatitude + 0.05, 
-                                                    AppConstants.defaultLongitude + 0.05,
-                                                  ),
-                                                ),
+                                          zoomLevel: _currentZoom,
+                                          isMapMoving: _isMapMoving,
+                                          visibleBounds: _visibleBounds,
                                         ),
                                         
                                         // Real OSM Buildings Layer with 2.5D effects
                                         OSMBuildingsLayer(
-                                          buildingBaseColor: MapStyles.buildingBaseColor,
-                                          buildingTopColor: MapStyles.buildingTopColor,
                                           tiltFactor: _tiltAnimation.value,
-                                          zoomLevel: _isMapInitialized ? _mapController.camera.zoom : AppConstants.defaultZoom,
-                                          visibleBounds: _isMapInitialized 
-                                              ? _mapController.camera.visibleBounds
-                                              : LatLngBounds(
-                                                  LatLng(
-                                                    AppConstants.defaultLatitude - 0.05, 
-                                                    AppConstants.defaultLongitude - 0.05,
-                                                  ),
-                                                  LatLng(
-                                                    AppConstants.defaultLatitude + 0.05, 
-                                                    AppConstants.defaultLongitude + 0.05,
-                                                  ),
-                                                ),
+                                          zoomLevel: _currentZoom,
+                                          isMapMoving: _isMapMoving,
+                                          visibleBounds: _visibleBounds,
+                                        ),
+                                      ] else ...[
+                                        // Decorative placeholder layers when not using real OSM data
+                                        // We won't need these once the real OSM layers are stable
+                                        TerrainLayer(
+                                          tiltFactor: _tiltAnimation.value,
+                                        ),
+                                        TreesLayer(
+                                          tiltFactor: _tiltAnimation.value,
+                                        ),
+                                        BuildingsLayer(
+                                          tiltFactor: _tiltAnimation.value,
                                         ),
                                       ],
                                       
-                                      // Markers cluster layer for pins with improved visuals
-                                      MarkerClusterLayerWidget(
-                                        options: MarkerClusterLayerOptions(
-                                          markers: markers,
-                                          builder: (context, markers) {
-                                            return _buildCluster(markers);
-                                          },
-                                          maxClusterRadius: 60,
-                                          size: const Size(48, 48),
-                                          padding: const EdgeInsets.all(50),
-                                          maxZoom: 16.0,
-                                        ),
-                                      ),
-                                      
-                                      // Add the user location marker if location is available
-                                      if (widget.mapProvider.currentPosition != null) 
+                                      // User location marker
+                                      if (widget.mapProvider.currentPosition != null)
                                         UserLocationMarker(
                                           position: LatLng(
                                             widget.mapProvider.currentPosition!.latitude,
@@ -299,9 +365,67 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
                                           heading: widget.mapProvider.currentPosition!.heading,
                                           primaryColor: Theme.of(context).primaryColor,
                                         ),
+                                        
+                                      // Music pins layer
+                                      MarkerClusterLayerWidget(
+                                        options: MarkerClusterLayerOptions(
+                                          maxClusterRadius: 45,
+                                          size: const Size(40, 40),
+                                          padding: const EdgeInsets.all(50),
+                                          markers: markers,
+                                          builder: (context, markers) {
+                                            return Container(
+                                              decoration: BoxDecoration(
+                                                borderRadius: BorderRadius.circular(20),
+                                                color: Colors.blue.withOpacity(0.7),
+                                              ),
+                                              child: Center(
+                                                child: Text(
+                                                  markers.length.toString(),
+                                                  style: const TextStyle(color: Colors.white),
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                      
+                                      // Popup layer for pins
+                                      PopupMarkerLayerWidget(
+                                        options: PopupMarkerLayerOptions(
+                                          markers: markers,
+                                          popupController: _popupController,
+                                          popupDisplayOptions: PopupDisplayOptions(
+                                            builder: (_, Marker marker) => _PopupBuilder(marker: marker),
+                                            snap: PopupSnap.markerTop,
+                                          ),
+                                        ),
+                                      ),
                                     ],
                                   ),
                                 ),
+                                
+                                // Show loading indicator during map movement for a better UX
+                                if (_isMapMoving && _buildingDetailLevel >= 2)
+                                  Positioned(
+                                    top: 10,
+                                    right: 10,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withOpacity(0.5),
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      child: const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                               ],
                             ),
                           ),
@@ -459,27 +583,6 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
     _moveAnimationController!.forward();
   }
   
-  void _determineDetailLevel() {
-    if (_isMapInitialized) {
-      final zoom = _mapController.camera.zoom;
-      int newDetail;
-      
-      if (zoom >= 17) {
-        newDetail = 3;      // High detail
-      } else if (zoom >= 15) {
-        newDetail = 2;      // Medium detail
-      } else {
-        newDetail = 1;      // Low detail
-      }
-      
-      if (newDetail != _buildingDetailLevel) {
-        setState(() {
-          _buildingDetailLevel = newDetail;
-        });
-      }
-    }
-  }
-  
   // Build the 2.5D perspective transformation matrix
   Matrix4 _build25DMatrix() {
     // Get the current tilt from animation
@@ -498,17 +601,6 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
     matrix.rotateX(tilt);
     
     return matrix;
-  }
-  
-  void _handleMapEvent(MapEvent event) {
-    if (event is MapEventMoveEnd) {
-      // Update map provider with new viewport
-      widget.mapProvider.updateViewport(
-        latitude: event.camera.center.latitude,
-        longitude: event.camera.center.longitude,
-        zoom: event.camera.zoom,
-      );
-    }
   }
   
   // Public method to reset the map view that can be called from outside
@@ -702,4 +794,75 @@ class CustomMarker extends Marker {
          height: height,
          alignment: alignment ?? Alignment.topCenter,
        );
+}
+
+// Popup builder for the map pins
+class _PopupBuilder extends StatelessWidget {
+  final Marker marker;
+  
+  const _PopupBuilder({
+    Key? key,
+    required this.marker,
+  }) : super(key: key);
+  
+  @override
+  Widget build(BuildContext context) {
+    if (marker is CustomMarker) {
+      final customMarker = marker as CustomMarker;
+      return _buildPinPopup(context, customMarker.pinData);
+    }
+    return const SizedBox.shrink();
+  }
+  
+  Widget _buildPinPopup(BuildContext context, Map<String, dynamic> pinData) {
+    // Extract pin information
+    final String title = pinData['title'] as String? ?? 'Unknown Location';
+    final String description = pinData['description'] as String? ?? '';
+    
+    return Card(
+      elevation: 6,
+      margin: const EdgeInsets.all(0),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 250, minWidth: 150),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+            if (description.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                description,
+                style: const TextStyle(fontSize: 14),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () {
+                  // Get the FlutterMapWidgetState to access the onPinTap callback
+                  final mapWidgetState = context.findAncestorStateOfType<FlutterMapWidgetState>();
+                  if (mapWidgetState != null) {
+                    mapWidgetState.widget.onPinTap(pinData);
+                  }
+                },
+                child: const Text('View Details'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 } 

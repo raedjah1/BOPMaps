@@ -11,12 +11,14 @@ class OSMPointsOfInterestLayer extends StatefulWidget {
   final double zoomLevel;
   final LatLngBounds visibleBounds;
   final double tiltFactor;
+  final bool isMapMoving;
   
   const OSMPointsOfInterestLayer({
     Key? key,
     required this.zoomLevel,
     required this.visibleBounds,
     this.tiltFactor = 1.0,
+    this.isMapMoving = false,
   }) : super(key: key);
 
   @override
@@ -126,8 +128,12 @@ class _OSMPointsOfInterestLayerState extends State<OSMPointsOfInterestLayer> wit
     if (oldWidget.zoomLevel != widget.zoomLevel || _lastBoundsKey != newBoundsKey) {
       _needsRefresh = true;
       
+      // If map is actively moving, only use delayed fetch to reduce API load
+      if (widget.isMapMoving) {
+        _delayedFetch();
+      }
       // Immediate refresh for significant zoom changes, delayed for others
-      if ((oldWidget.zoomLevel - widget.zoomLevel).abs() > 0.5) {
+      else if ((oldWidget.zoomLevel - widget.zoomLevel).abs() > 0.5) {
         _fetchPOIs();
       } else {
         _delayedFetch();

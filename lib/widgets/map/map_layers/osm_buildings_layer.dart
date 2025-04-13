@@ -3,26 +3,33 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path; // Hide Path from latlong2
 import 'dart:math' as math;
 import 'dart:ui'; // Explicitly import dart:ui for Path
-import 'package:flutter/foundation.dart';
 
 import 'osm_data_processor.dart';
-import '../map_styles.dart';
+
+// Extension to add normalize method to Offset
+extension OffsetExtensions on Offset {
+  Offset normalize() {
+    final double magnitude = distance;
+    if (magnitude == 0) return Offset.zero;
+    return Offset(dx / magnitude, dy / magnitude);
+  }
+}
 
 /// A custom layer to render OpenStreetMap buildings in 2.5D
 class OSMBuildingsLayer extends StatefulWidget {
-  final Color buildingBaseColor;
-  final Color buildingTopColor;
   final double tiltFactor;
   final double zoomLevel;
   final LatLngBounds visibleBounds;
+  final bool isMapMoving;
+  final String theme; // Added theme parameter for customization
   
   const OSMBuildingsLayer({
     Key? key,
-    this.buildingBaseColor = MapStyles.buildingBaseColor,
-    this.buildingTopColor = MapStyles.buildingTopColor,
     this.tiltFactor = 1.0,
     required this.zoomLevel,
     required this.visibleBounds,
+    this.isMapMoving = false,
+    this.theme = 'vibrant', // Default to vibrant theme
   }) : super(key: key);
 
   @override
@@ -35,10 +42,164 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
   bool _isLoading = true;
   bool _needsRefresh = true;
   String _lastBoundsKey = "";
+  String _currentTheme = 'vibrant';
+  
+  // Track last fetch params to avoid unnecessary fetches
+  LatLngBounds? _lastFetchedBounds;
+  double _lastFetchedZoom = 0;
+  bool _didInitialFetch = false;
+  
+  // Building color palettes for different themes
+  final Map<String, Map<String, Map<String, Color>>> _buildingColorPalette = {
+    'vibrant': {
+      'commercial': {
+        'wall': const Color(0xFF7986CB), 
+        'roof': const Color(0xFF5C6BC0)
+      },
+      'residential': {
+        'wall': const Color(0xFFFFB74D), 
+        'roof': const Color(0xFFFF9800)
+      },
+      'office': {
+        'wall': const Color(0xFF4FC3F7), 
+        'roof': const Color(0xFF29B6F6)
+      },
+      'industrial': {
+        'wall': const Color(0xFF90A4AE), 
+        'roof': const Color(0xFF78909C)
+      },
+      'education': {
+        'wall': const Color(0xFF81C784), 
+        'roof': const Color(0xFF66BB6A)
+      },
+      'healthcare': {
+        'wall': const Color(0xFFE57373), 
+        'roof': const Color(0xFFEF5350)
+      },
+      'public': {
+        'wall': const Color(0xFFBA68C8), 
+        'roof': const Color(0xFFAB47BC)
+      },
+      'historic': {
+        'wall': const Color(0xFFD4B178), 
+        'roof': const Color(0xFFC19A57)
+      },
+      'default': {
+        'wall': const Color(0xFFBDBDBD), 
+        'roof': const Color(0xFF9E9E9E)
+      },
+    },
+    'dark': {
+      'commercial': {
+        'wall': const Color(0xFF5C6BC0).withAlpha(220), 
+        'roof': const Color(0xFF3F51B5).withAlpha(220)
+      },
+      'residential': {
+        'wall': const Color(0xFFFF9800).withAlpha(220), 
+        'roof': const Color(0xFFF57C00).withAlpha(220)
+      },
+      'office': {
+        'wall': const Color(0xFF0288D1).withAlpha(220), 
+        'roof': const Color(0xFF0277BD).withAlpha(220)
+      },
+      'industrial': {
+        'wall': const Color(0xFF546E7A).withAlpha(220), 
+        'roof': const Color(0xFF455A64).withAlpha(220)
+      },
+      'education': {
+        'wall': const Color(0xFF388E3C).withAlpha(220), 
+        'roof': const Color(0xFF2E7D32).withAlpha(220)
+      },
+      'healthcare': {
+        'wall': const Color(0xFFD32F2F).withAlpha(220), 
+        'roof': const Color(0xFFC62828).withAlpha(220)
+      },
+      'public': {
+        'wall': const Color(0xFF8E24AA).withAlpha(220), 
+        'roof': const Color(0xFF7B1FA2).withAlpha(220)
+      },
+      'historic': {
+        'wall': const Color(0xFFAA8E57).withAlpha(220), 
+        'roof': const Color(0xFF8D6E3A).withAlpha(220)
+      },
+      'default': {
+        'wall': const Color(0xFF616161).withAlpha(220), 
+        'roof': const Color(0xFF424242).withAlpha(220)
+      },
+    },
+    // Monochrome Uber-like theme
+    'monochrome': {
+      'commercial': {
+        'wall': const Color(0xFF374151), 
+        'roof': const Color(0xFF1F2937)
+      },
+      'residential': {
+        'wall': const Color(0xFF4B5563), 
+        'roof': const Color(0xFF374151)
+      },
+      'office': {
+        'wall': const Color(0xFF1F2937), 
+        'roof': const Color(0xFF111827)
+      },
+      'industrial': {
+        'wall': const Color(0xFF6B7280), 
+        'roof': const Color(0xFF4B5563)
+      },
+      'education': {
+        'wall': const Color(0xFF374151), 
+        'roof': const Color(0xFF1F2937)
+      },
+      'healthcare': {
+        'wall': const Color(0xFF4B5563), 
+        'roof': const Color(0xFF374151)
+      },
+      'public': {
+        'wall': const Color(0xFF6B7280), 
+        'roof': const Color(0xFF4B5563)
+      },
+      'historic': {
+        'wall': const Color(0xFF1F2937), 
+        'roof': const Color(0xFF111827)
+      },
+      'default': {
+        'wall': const Color(0xFF4B5563), 
+        'roof': const Color(0xFF374151)
+      },
+    },
+  };
+  
+  // Rooftop colors for different themes
+  final Map<String, Map<String, Color>> _rooftopColors = {
+    'vibrant': {
+      'default': const Color(0xFFCFCFCF),   // Lighter gray for roofs
+      'commercial': const Color(0xFFCE93D8), // Darker purple for commercial
+      'residential': const Color(0xFFFFAB91), // Darker peach for residential
+      'office': const Color(0xFF80CBC4),    // Darker teal for office
+      'industrial': const Color(0xFFFFCA28), // Darker amber for industrial
+      'retail': const Color(0xFFF48FB1),    // Darker pink for retail
+      'public': const Color(0xFF64B5F6),    // Darker blue for public
+      'education': const Color(0xFFAED581), // Darker green for education
+      'healthcare': const Color(0xFFEC407A), // Bright pink for healthcare
+      'historic': const Color(0xFFDCE775),  // Darker lime for historic
+    },
+    'dark': {
+      'default': const Color(0xFF616161),   // Dark gray for roofs
+      'commercial': const Color(0xFF6A1B9A).withOpacity(0.9),  // Very dark purple
+      'residential': const Color(0xFFE64A19).withOpacity(0.9),  // Dark orange
+      'office': const Color(0xFF00897B).withOpacity(0.9),     // Dark teal
+      'industrial': const Color(0xFFFF8F00).withOpacity(0.9),  // Dark amber
+      'retail': const Color(0xFFC2185B).withOpacity(0.9),     // Dark pink
+      'public': const Color(0xFF1565C0).withOpacity(0.9),     // Dark blue
+      'education': const Color(0xFF558B2F).withOpacity(0.9),  // Dark green
+      'healthcare': const Color(0xFFC2185B).withOpacity(0.9),  // Dark pink
+      'historic': const Color(0xFFAFB42B).withOpacity(0.9),   // Dark lime
+    },
+  };
   
   @override
   void initState() {
     super.initState();
+    _currentTheme = widget.theme;
     _fetchBuildings();
   }
   
@@ -46,19 +207,25 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
   void didUpdateWidget(OSMBuildingsLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     
-    // Calculate a key to identify the current visible bounds (with reduced precision)
-    final newBoundsKey = _getBoundsKey();
+    // Update theme if it changed
+    if (widget.theme != _currentTheme) {
+      setState(() {
+        _currentTheme = widget.theme;
+      });
+    }
     
-    // Only fetch new buildings when zoom level changes significantly or bounds change
-    if (oldWidget.zoomLevel != widget.zoomLevel || _lastBoundsKey != newBoundsKey) {
-      _needsRefresh = true;
-      
-      // Immediate refresh for significant zoom changes, delayed for others
-      if ((oldWidget.zoomLevel - widget.zoomLevel).abs() > 0.5) {
-        _fetchBuildings();
-      } else {
-        _delayedFetch();
-      }
+    // Skip updates if map is moving for better performance
+    if (widget.isMapMoving && _buildings.isNotEmpty) {
+      return;
+    }
+    
+    // Check if we need to update data - significant bounds/zoom change
+    final boundsChanged = _lastFetchedBounds == null || 
+        !_areBoundsSimilar(_lastFetchedBounds!, widget.visibleBounds);
+    final zoomChanged = (_lastFetchedZoom - widget.zoomLevel).abs() >= 1.0;
+    
+    if (boundsChanged || zoomChanged) {
+      _fetchBuildings();
     }
   }
   
@@ -74,6 +241,30 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
     return key;
   }
   
+  // Check if bounds are similar enough to avoid unnecessary fetches
+  bool _areBoundsSimilar(LatLngBounds bounds1, LatLngBounds bounds2) {
+    // Calculate center points
+    final LatLng center1 = LatLng(
+      (bounds1.north + bounds1.south) / 2,
+      (bounds1.east + bounds1.west) / 2,
+    );
+    final LatLng center2 = LatLng(
+      (bounds2.north + bounds2.south) / 2,
+      (bounds2.east + bounds2.west) / 2,
+    );
+    
+    // Calculate distance between centers (in degrees)
+    final double latDiff = (center1.latitude - center2.latitude).abs();
+    final double lngDiff = (center1.longitude - center2.longitude).abs();
+    
+    // Calculate size of bounds (in degrees)
+    final double bounds1Height = bounds1.north - bounds1.south;
+    final double bounds1Width = bounds1.east - bounds1.west;
+    
+    // If centers differ by more than 30% of the bounds size, consider them different
+    return latDiff < (bounds1Height * 0.3) && lngDiff < (bounds1Width * 0.3);
+  }
+  
   // Delay fetch to prevent excessive API calls during continuous panning/zooming
   void _delayedFetch() {
     Future.delayed(const Duration(milliseconds: 300), () {
@@ -84,18 +275,6 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
   }
   
   void _fetchBuildings() async {
-    // Skip fetching if too zoomed out (below zoom threshold)
-    if (widget.zoomLevel < 13.0) {
-      if (mounted) {
-        setState(() {
-          _buildings = [];
-          _isLoading = false;
-          _needsRefresh = false;
-        });
-      }
-      return;
-    }
-    
     setState(() {
       _isLoading = true;
     });
@@ -110,515 +289,796 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
     final buildings = await _dataProcessor.fetchBuildingData(southwest, northeast);
     
     if (mounted) {
-      // Apply optimizations based on zoom level
-      List<Map<String, dynamic>> optimizedBuildings = _optimizeBuildings(buildings);
-      
       setState(() {
-        _buildings = optimizedBuildings;
+        _buildings = buildings;
         _isLoading = false;
         _needsRefresh = false;
+        _lastFetchedBounds = widget.visibleBounds;
+        _lastFetchedZoom = widget.zoomLevel;
+        _didInitialFetch = true;
       });
     }
-  }
-  
-  // Optimize buildings for rendering based on zoom level
-  List<Map<String, dynamic>> _optimizeBuildings(List<Map<String, dynamic>> buildings) {
-    if (buildings.isEmpty) return [];
-    
-    // At lower zoom levels, limit the number of buildings to render
-    if (widget.zoomLevel < MapStyles.simplifyBuildingsBeforeZoom) {
-      // Sort buildings by height/size (keep the most notable ones)
-      buildings.sort((a, b) => (b['height'] as double).compareTo(a['height'] as double));
-      
-      // Further limit buildings at very low zoom
-      final int maxBuildings = widget.zoomLevel < 15 
-          ? MapStyles.maxBuildingsPerTile 
-          : MapStyles.maxBuildingsPerTile * 2;
-      
-      // Take only the first N buildings
-      if (buildings.length > maxBuildings) {
-        buildings = buildings.sublist(0, maxBuildings);
-      }
-      
-      // Simplify building geometry if needed
-      return buildings.map((building) {
-        // Skip simplification for already simple buildings
-        final List<LatLng> points = building['points'] as List<LatLng>;
-        if (points.length <= 5) return building;
-        
-        // Simplify geometry for complex buildings
-        List<LatLng> simplifiedPoints = _simplifyPolygon(points, MapStyles.simplifyBuildingsTolerance);
-        
-        return {
-          ...building,
-          'points': simplifiedPoints,
-        };
-      }).toList();
-    }
-    
-    return buildings;
-  }
-  
-  // Implementation of Ramer-Douglas-Peucker algorithm for polygon simplification
-  List<LatLng> _simplifyPolygon(List<LatLng> points, double tolerance) {
-    if (points.length <= 4) return points; // Don't simplify very simple polygons
-    
-    // Make sure the polygon is closed
-    final isClosed = points.first.latitude == points.last.latitude && 
-                     points.first.longitude == points.last.longitude;
-    
-    final List<LatLng> workingPoints = isClosed ? points.sublist(0, points.length - 1) : points;
-    final List<LatLng> simplified = _rdpSimplify(workingPoints, tolerance);
-    
-    // Close the polygon if it was closed before
-    if (isClosed && simplified.isNotEmpty) {
-      simplified.add(simplified.first);
-    }
-    
-    return simplified;
-  }
-  
-  // Ramer-Douglas-Peucker algorithm implementation
-  List<LatLng> _rdpSimplify(List<LatLng> points, double epsilon) {
-    if (points.length <= 2) return points;
-    
-    // Find the point with the maximum distance from line between start and end
-    double dmax = 0.0;
-    int index = 0;
-    
-    for (int i = 1; i < points.length - 1; i++) {
-      double d = _perpendicularDistance(points[i], points[0], points[points.length - 1]);
-      if (d > dmax) {
-        index = i;
-        dmax = d;
-      }
-    }
-    
-    // If max distance is greater than epsilon, recursively simplify
-    List<LatLng> result = [];
-    if (dmax > epsilon) {
-      List<LatLng> recResults1 = _rdpSimplify(points.sublist(0, index + 1), epsilon);
-      List<LatLng> recResults2 = _rdpSimplify(points.sublist(index), epsilon);
-      
-      // Build the result list
-      result = recResults1.sublist(0, recResults1.length - 1)..addAll(recResults2);
-    } else {
-      result = [points[0], points[points.length - 1]];
-    }
-    
-    return result;
-  }
-  
-  // Calculate perpendicular distance from point to line
-  double _perpendicularDistance(LatLng point, LatLng lineStart, LatLng lineEnd) {
-    double area = (
-      (lineEnd.latitude - lineStart.latitude) * (point.longitude - lineStart.longitude) -
-      (lineEnd.longitude - lineStart.longitude) * (point.latitude - lineStart.latitude)
-    ).abs() / 2;
-    
-    double base = math.sqrt(
-      math.pow(lineEnd.latitude - lineStart.latitude, 2) +
-      math.pow(lineEnd.longitude - lineStart.longitude, 2)
-    );
-    
-    return area / base * 2;
   }
 
   @override
   Widget build(BuildContext context) {
-    // Return empty container while loading or if buildings list is empty
-    if (_isLoading || _buildings.isEmpty) {
+    // Determine effective theme (adapt to system theme or use explicit theme)
+    final effectiveTheme = widget.theme == 'auto' 
+        ? MediaQuery.of(context).platformBrightness == Brightness.dark ? 'dark' : 'vibrant'
+        : widget.theme;
+    
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (_isLoading && !_didInitialFetch) {
+          // Show loading indicator on first load
+          return Center(
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+            ),
+          );
+        }
+        
+        if (_buildings.isEmpty && _didInitialFetch) {
+          // No buildings found but we did search
       return const SizedBox.shrink();
     }
     
     return CustomPaint(
+          size: Size(
+            constraints.maxWidth,
+            constraints.maxHeight,
+          ),
       painter: OSMBuildingsPainter(
         buildings: _buildings,
-        buildingBaseColor: widget.buildingBaseColor,
-        buildingTopColor: widget.buildingTopColor,
         tiltFactor: widget.tiltFactor,
         zoomLevel: widget.zoomLevel,
-        mapBounds: widget.visibleBounds,
-      ),
-      size: Size.infinite,
+            visibleBounds: widget.visibleBounds,
+            theme: effectiveTheme, // Pass theme to painter
+          ),
+          // Add overlay for interactive building selection if needed
+          child: widget.zoomLevel >= 17.0 ? GestureDetector(
+            onTapDown: _handleTapDown,
+            child: Container(color: Colors.transparent),
+          ) : null,
+        );
+      },
     );
+  }
+  
+  // Handle taps on buildings for future interactive features
+  void _handleTapDown(TapDownDetails details) {
+    // Get tap position
+    final tapPosition = details.localPosition;
+    
+    // Find building under tap
+    // This would be implemented to detect which building was tapped
+    // for implementing selection, info display, etc.
+    
+    // For future implementation - can use hit testing with paths
   }
 }
 
 /// Custom painter to render buildings in 2.5D
 class OSMBuildingsPainter extends CustomPainter {
   final List<Map<String, dynamic>> buildings;
-  final Color buildingBaseColor;
-  final Color buildingTopColor;
   final double tiltFactor;
   final double zoomLevel;
-  final LatLngBounds mapBounds;
-  final math.Random _random = math.Random(42); // Consistent seed for reproducibility
+  final LatLngBounds visibleBounds;
+  final String theme;
+  final math.Random _random = math.Random(42); // Add random generator with fixed seed
   
   OSMBuildingsPainter({
     required this.buildings,
-    required this.buildingBaseColor,
-    required this.buildingTopColor,
     required this.tiltFactor,
     required this.zoomLevel,
-    required this.mapBounds,
+    required this.visibleBounds,
+    required this.theme,
   });
+  
+  // Building color palettes for different themes
+  final Map<String, Map<String, Map<String, Color>>> _buildingColorPalette = {
+    'vibrant': {
+      'commercial': {
+        'wall': const Color(0xFF7986CB), 
+        'roof': const Color(0xFF5C6BC0)
+      },
+      'residential': {
+        'wall': const Color(0xFFFFB74D), 
+        'roof': const Color(0xFFFF9800)
+      },
+      'office': {
+        'wall': const Color(0xFF4FC3F7), 
+        'roof': const Color(0xFF29B6F6)
+      },
+      'industrial': {
+        'wall': const Color(0xFF90A4AE), 
+        'roof': const Color(0xFF78909C)
+      },
+      'education': {
+        'wall': const Color(0xFF81C784), 
+        'roof': const Color(0xFF66BB6A)
+      },
+      'healthcare': {
+        'wall': const Color(0xFFE57373), 
+        'roof': const Color(0xFFEF5350)
+      },
+      'public': {
+        'wall': const Color(0xFFBA68C8), 
+        'roof': const Color(0xFFAB47BC)
+      },
+      'historic': {
+        'wall': const Color(0xFFD4B178), 
+        'roof': const Color(0xFFC19A57)
+      },
+      'default': {
+        'wall': const Color(0xFFBDBDBD), 
+        'roof': const Color(0xFF9E9E9E)
+      },
+    },
+    'dark': {
+      'commercial': {
+        'wall': const Color(0xFF5C6BC0).withAlpha(220), 
+        'roof': const Color(0xFF3F51B5).withAlpha(220)
+      },
+      'residential': {
+        'wall': const Color(0xFFFF9800).withAlpha(220), 
+        'roof': const Color(0xFFF57C00).withAlpha(220)
+      },
+      'office': {
+        'wall': const Color(0xFF0288D1).withAlpha(220), 
+        'roof': const Color(0xFF0277BD).withAlpha(220)
+      },
+      'industrial': {
+        'wall': const Color(0xFF546E7A).withAlpha(220), 
+        'roof': const Color(0xFF455A64).withAlpha(220)
+      },
+      'education': {
+        'wall': const Color(0xFF388E3C).withAlpha(220), 
+        'roof': const Color(0xFF2E7D32).withAlpha(220)
+      },
+      'healthcare': {
+        'wall': const Color(0xFFD32F2F).withAlpha(220), 
+        'roof': const Color(0xFFC62828).withAlpha(220)
+      },
+      'public': {
+        'wall': const Color(0xFF8E24AA).withAlpha(220), 
+        'roof': const Color(0xFF7B1FA2).withAlpha(220)
+      },
+      'historic': {
+        'wall': const Color(0xFFAA8E57).withAlpha(220), 
+        'roof': const Color(0xFF8D6E3A).withAlpha(220)
+      },
+      'default': {
+        'wall': const Color(0xFF616161).withAlpha(220), 
+        'roof': const Color(0xFF424242).withAlpha(220)
+      },
+    },
+    // Monochrome Uber-like theme
+    'monochrome': {
+      'commercial': {
+        'wall': const Color(0xFF374151), 
+        'roof': const Color(0xFF1F2937)
+      },
+      'residential': {
+        'wall': const Color(0xFF4B5563), 
+        'roof': const Color(0xFF374151)
+      },
+      'office': {
+        'wall': const Color(0xFF1F2937), 
+        'roof': const Color(0xFF111827)
+      },
+      'industrial': {
+        'wall': const Color(0xFF6B7280), 
+        'roof': const Color(0xFF4B5563)
+      },
+      'education': {
+        'wall': const Color(0xFF374151), 
+        'roof': const Color(0xFF1F2937)
+      },
+      'healthcare': {
+        'wall': const Color(0xFF4B5563), 
+        'roof': const Color(0xFF374151)
+      },
+      'public': {
+        'wall': const Color(0xFF6B7280), 
+        'roof': const Color(0xFF4B5563)
+      },
+      'historic': {
+        'wall': const Color(0xFF1F2937), 
+        'roof': const Color(0xFF111827)
+      },
+      'default': {
+        'wall': const Color(0xFF4B5563), 
+        'roof': const Color(0xFF374151)
+      },
+    },
+  };
+  
+  // Rooftop colors for different themes
+  final Map<String, Map<String, Color>> _rooftopColors = {
+    'vibrant': {
+      'default': const Color(0xFFCFCFCF),   // Lighter gray for roofs
+      'commercial': const Color(0xFFCE93D8), // Darker purple for commercial
+      'residential': const Color(0xFFFFAB91), // Darker peach for residential
+      'office': const Color(0xFF80CBC4),    // Darker teal for office
+      'industrial': const Color(0xFFFFCA28), // Darker amber for industrial
+      'retail': const Color(0xFFF48FB1),    // Darker pink for retail
+      'public': const Color(0xFF64B5F6),    // Darker blue for public
+      'education': const Color(0xFFAED581), // Darker green for education
+      'healthcare': const Color(0xFFEC407A), // Bright pink for healthcare
+      'historic': const Color(0xFFDCE775),  // Darker lime for historic
+    },
+    'dark': {
+      'default': const Color(0xFF616161),   // Dark gray for roofs
+      'commercial': const Color(0xFF6A1B9A).withOpacity(0.9),  // Very dark purple
+      'residential': const Color(0xFFE64A19).withOpacity(0.9),  // Dark orange
+      'office': const Color(0xFF00897B).withOpacity(0.9),     // Dark teal
+      'industrial': const Color(0xFFFF8F00).withOpacity(0.9),  // Dark amber
+      'retail': const Color(0xFFC2185B).withOpacity(0.9),     // Dark pink
+      'public': const Color(0xFF1565C0).withOpacity(0.9),     // Dark blue
+      'education': const Color(0xFF558B2F).withOpacity(0.9),  // Dark green
+      'healthcare': const Color(0xFFC2185B).withOpacity(0.9),  // Dark pink
+      'historic': const Color(0xFFAFB42B).withOpacity(0.9),   // Dark lime
+    },
+  };
   
   @override
   void paint(Canvas canvas, Size size) {
-    // Skip rendering if tilt is too small
-    if (tiltFactor < 0.05) return;
+    if (buildings.isEmpty) return;
     
-    // Calculate the scale factor for building height based on zoom
-    // Optimize: reduce height at lower zoom levels
-    final double zoomFactor = math.min(1.0, (zoomLevel - 13) / 6); // Scale from 0-1 between zoom 13-19
-    final heightScale = 0.0001 * math.pow(2, zoomLevel) * MapStyles.buildingHeightScale * zoomFactor;
+    final Paint buildingPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..strokeWidth = 1.0;
     
-    // Sort buildings by latitude (south to north) for proper rendering order
-    // This is a simple approximation - a more accurate approach would sort by distance from camera
-    final sortedBuildings = List<Map<String, dynamic>>.from(buildings)
-      ..sort((a, b) {
-        // Get center point of each building
-        LatLng centerA = _calculateCenter(a['points'] as List<LatLng>);
-        LatLng centerB = _calculateCenter(b['points'] as List<LatLng>);
-        return centerB.latitude.compareTo(centerA.latitude);
-      });
-      
-    // Bounds conversion helpers
-    final sw = mapBounds.southWest;
-    final ne = mapBounds.northEast;
-    final mapWidth = ne.longitude - sw.longitude;
-    final mapHeight = ne.latitude - sw.latitude;
+    final Paint roofPaint = Paint()
+      ..style = PaintingStyle.fill;
     
-    // Building category colors based on types/importance
-    Map<String, Color> buildingCategoryColors = {
-      'commercial': MapStyles.commercialAreaColor,
-      'retail': Color.lerp(buildingBaseColor, MapStyles.retailColor, 0.15)!,
-      'office': Color.lerp(buildingBaseColor, Color(0xFF455A64), 0.2)!,
-      'residential': Color.lerp(buildingBaseColor, MapStyles.residentialAreaColor, 0.1)!,
-      'apartments': Color.lerp(buildingBaseColor, Color(0xFF5D4037), 0.1)!,
-      'industrial': Color.lerp(buildingBaseColor, Color(0xFF424242), 0.15)!,
-      'warehouse': Color.lerp(buildingBaseColor, Color(0xFF424242), 0.1)!,
-      'hotel': Color.lerp(buildingBaseColor, MapStyles.entertainmentColor, 0.1)!,
-      'supermarket': Color.lerp(buildingBaseColor, MapStyles.foodAndDrinkColor, 0.15)!,
-      'restaurant': Color.lerp(buildingBaseColor, MapStyles.foodAndDrinkColor, 0.1)!,
-      'university': Color.lerp(buildingBaseColor, Color(0xFF0097A7), 0.15)!,
-      'school': Color.lerp(buildingBaseColor, Color(0xFF00897B), 0.1)!,
-      'hospital': Color.lerp(buildingBaseColor, Color(0xFFEF5350), 0.1)!,
-      'transportation': Color.lerp(buildingBaseColor, MapStyles.transportColor, 0.1)!,
-      'train_station': Color.lerp(buildingBaseColor, MapStyles.transportColor, 0.15)!,
-      'civic': Color.lerp(buildingBaseColor, MapStyles.landmarkColor, 0.15)!,
-      'government': Color.lerp(buildingBaseColor, MapStyles.landmarkColor, 0.2)!,
-      'historic': Color.lerp(buildingBaseColor, MapStyles.landmarkColor, 0.2)!,
-      'attraction': Color.lerp(buildingBaseColor, MapStyles.entertainmentColor, 0.2)!,
-    };
+    final Paint outlinePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.5
+      ..color = Colors.black.withOpacity(0.3);
     
-    // Draw each building
-    for (final building in sortedBuildings) {
-      final List<LatLng> points = building['points'] as List<LatLng>;
-      if (points.length < 3) continue; // Skip invalid buildings
+    // Scale and position calculations
+    final double latSpan = visibleBounds.north - visibleBounds.south;
+    final double lngSpan = visibleBounds.east - visibleBounds.west;
+    
+    for (var building in buildings) {
+      if (building['points'].isEmpty) continue;
       
-      // Extract building tags
-      final Map<String, dynamic> tags = building['tags'] as Map<String, dynamic>;
+      final path = Path();
       
-      // Convert building height to screen units with optimization
-      double buildingHeight = (building['height'] as double);
-      
-      // For important buildings at lower zoom levels, exaggerate height slightly
-      if (zoomLevel < 16 && tags.containsKey('building:levels') && (tags['building:levels'] as String).isNotEmpty) {
-        final levelsStr = tags['building:levels'] as String;
-        final levels = double.tryParse(levelsStr) ?? 1.0;
-        if (levels > 5) {
-          // Exaggerate tall buildings at lower zoom levels for better visibility
-          buildingHeight *= 1.2;
-        }
-      }
-      
-      // Apply height scaling
-      buildingHeight *= heightScale * tiltFactor;
-      
-      // Convert LatLng points to screen coordinates
-      final List<Offset> screenPoints = points.map((latLng) {
-        // Map from LatLng to screen coordinates
-        final double x = (latLng.longitude - sw.longitude) / mapWidth * size.width;
-        final double y = (1 - (latLng.latitude - sw.latitude) / mapHeight) * size.height;
+      // Convert all nodes of the building to screen coordinates
+      final List<Offset> screenPoints = (building['points'] as List<LatLng>).map((point) {
+        final double x = ((point.longitude - visibleBounds.west) / lngSpan) * size.width;
+        final double y = (1 - ((point.latitude - visibleBounds.south) / latSpan)) * size.height;
         return Offset(x, y);
       }).toList();
       
-      // Calculate the average building position for shadow offset
-      final avgX = screenPoints.fold<double>(0, (prev, point) => prev + point.dx) / screenPoints.length;
-      final avgY = screenPoints.fold<double>(0, (prev, point) => prev + point.dy) / screenPoints.length;
+      if (screenPoints.isEmpty) continue;
       
-      // Draw shadows first to ensure they appear behind buildings
-      _drawBuildingShadow(canvas, screenPoints, buildingHeight, size);
+      // Start the path at the first point
+      path.moveTo(screenPoints[0].dx, screenPoints[0].dy);
       
-      // Create the base building polygon - Use dart:ui Path
-      final Path basePath = Path()..addPolygon(screenPoints, true);
+      // Add all other points
+      for (int i = 1; i < screenPoints.length; i++) {
+        path.lineTo(screenPoints[i].dx, screenPoints[i].dy);
+      }
       
-      // Determine building color based on its type
-      Color baseColor = buildingBaseColor;
-      Color topColor = buildingTopColor;
+      // Close the path
+      path.close();
       
-      // Check if building has a specific type to assign a special color
-      String? buildingType;
+      // Determine building type and height
+      final Map<String, dynamic> tags = building['tags'] as Map<String, dynamic>;
+      final String buildingType = tags['building'] ?? 'yes';
       
-      // Check various OSM tags to determine building type
-      if (tags.containsKey('building')) {
-        String bType = tags['building'] as String;
-        if (buildingCategoryColors.containsKey(bType)) {
-          buildingType = bType;
+      // Default height if not specified
+      double height = 10.0;
+      
+      // Parse height from tags if available
+      if (tags.containsKey('height')) {
+        try {
+          height = double.parse(tags['height'] as String);
+        } catch (e) {
+          // If parse fails, use default height
+        }
+      } else if (tags.containsKey('building:levels')) {
+        try {
+          // Approximate 3 meters per level
+          height = double.parse(tags['building:levels'] as String) * 3.0;
+        } catch (e) {
+          // If parse fails, use default height
         }
       }
       
-      // Check amenity tag if building type is still unknown
-      if (buildingType == null && tags.containsKey('amenity')) {
-        String amenity = tags['amenity'] as String;
-        if (amenity == 'restaurant' || amenity == 'cafe' || amenity == 'food_court') {
-          buildingType = 'restaurant';
-        } else if (amenity == 'university' || amenity == 'college') {
-          buildingType = 'university';
-        } else if (amenity == 'school') {
-          buildingType = 'school';
-        } else if (amenity == 'hospital' || amenity == 'clinic') {
-          buildingType = 'hospital';
-        } else if (amenity == 'theatre' || amenity == 'cinema' || amenity == 'arts_centre') {
-          buildingType = 'attraction';
+      // Adjust height for special building types
+      if (buildingType == 'cathedral' || buildingType == 'church') {
+        height = height * 1.5;
+      } else if (buildingType == 'skyscraper') {
+        height = height * 2.0;
+      }
+      
+      // Get colors based on building type
+      final Color wallColor = _getBuildingColor(tags);
+      final Color roofColor = _getRoofColor(tags);
+      
+      // For higher zoom levels, draw enhanced buildings with 3D effect
+      if (zoomLevel >= 15.0) {
+        _drawEnhancedBuilding(
+          canvas,
+          path,
+          height,
+          wallColor,
+          roofColor,
+          screenPoints,
+          zoomLevel,
+          tags,
+        );
+      } else {
+        // For lower zoom levels, use simpler rendering
+        buildingPaint.color = wallColor;
+        roofPaint.color = roofColor;
+        
+        // Draw shadow if tilted
+        if (tiltFactor > 0.05) {
+          final shadowPath = Path.from(path);
+          shadowPath.shift(Offset(1.0, 1.0));
+          canvas.drawPath(
+            shadowPath,
+            Paint()
+              ..color = Colors.black.withOpacity(0.2)
+              ..style = PaintingStyle.fill,
+          );
         }
-      }
-      
-      // Check shop tag
-      if (buildingType == null && tags.containsKey('shop')) {
-        buildingType = 'retail';
-      }
-      
-      // If we know the building type, assign the appropriate color
-      if (buildingType != null && buildingCategoryColors.containsKey(buildingType)) {
-        baseColor = buildingCategoryColors[buildingType]!;
-        topColor = Color.lerp(buildingCategoryColors[buildingType]!, Colors.white, 0.15)!;
-      }
-      
-      // Apply subtle color variation for visual interest
-      final basePaint = Paint()
-        ..style = PaintingStyle.fill
-        ..color = _variateColor(baseColor);
-      
-      canvas.drawPath(basePath, basePaint);
-      
-      // Draw the extruded top face (roof) - Use dart:ui Path
-      final Path roofPath = Path();
-      final List<Offset> roofPoints = screenPoints.map((point) {
-        return Offset(point.dx, point.dy - buildingHeight);
-      }).toList();
-      
-      roofPath.addPolygon(roofPoints, true);
-      
-      final roofPaint = Paint()
-        ..style = PaintingStyle.fill
-        ..color = _variateColor(topColor);
-      
-      canvas.drawPath(roofPath, roofPaint);
-      
-      // Draw sides to connect base and roof
-      for (int i = 0; i < screenPoints.length; i++) {
-        final int nextIndex = (i + 1) % screenPoints.length;
         
-        final Offset p1 = screenPoints[i];
-        final Offset p2 = screenPoints[nextIndex];
-        final Offset p3 = roofPoints[nextIndex];
-        final Offset p4 = roofPoints[i];
+        // Draw building base
+        canvas.drawPath(path, buildingPaint);
         
-        if (p1.dx == p2.dx && p1.dy == p2.dy) continue; // Skip zero-length segments
-        
-        // Side face path
-        final Path sidePath = Path()
-          ..moveTo(p1.dx, p1.dy)
-          ..lineTo(p2.dx, p2.dy)
-          ..lineTo(p3.dx, p3.dy)
-          ..lineTo(p4.dx, p4.dy)
-          ..close();
-        
-        // Calculate side color - darker for sides that should be shaded
-        final sideColor = _calculateSideColor(p1, p2, baseColor);
-        final sidePaint = Paint()
-          ..style = PaintingStyle.fill
-          ..color = sideColor;
-        
-        canvas.drawPath(sidePath, sidePaint);
-      }
-      
-      // Add windows to large buildings for added detail when the building is big enough
-      if (buildingHeight > 20 && zoomLevel >= 16) {
-        _drawWindows(canvas, screenPoints, roofPoints, buildingHeight);
+        // Draw outline
+        canvas.drawPath(path, outlinePaint);
       }
     }
   }
   
-  // Draw a shadow beneath the building for 2.5D effect
-  void _drawBuildingShadow(Canvas canvas, List<Offset> screenPoints, double buildingHeight, Size size) {
-    // Skip very small buildings or when tilt factor is minor
-    if (buildingHeight < 5 || tiltFactor < 0.2) return;
+  // Gets the appropriate building color based on building type and theme
+  Color _getBuildingColor(Map<String, dynamic> tags) {
+    final String buildingType = _getBuildingType(tags);
+    final double height = _getBuildingHeight(tags);
     
-    // Create a path for the shadow
-    final Path shadowPath = Path();
+    // Get the color map for the current theme, or fall back to vibrant theme
+    final Map<String, Map<String, Color>>? themeColors = _buildingColorPalette[theme];
+    if (themeColors == null) {
+      return _buildingColorPalette['vibrant']?['default']?['wall'] ?? const Color(0xFFBDBDBD);
+    }
     
-    // Calculate shadow offset based on height and light direction
-    final double shadowOffsetX = buildingHeight * 0.3;
-    final double shadowOffsetY = buildingHeight * 0.15;
+    // Adjust opacity based on height for taller buildings
+    double opacity = 0.85;
+    if (height > 20) {
+      opacity = 0.9;
+    } else if (height > 50) {
+      opacity = 0.95;
+    }
     
-    // Create shadow points with offset
-    final List<Offset> shadowPoints = screenPoints.map((point) {
-      return Offset(point.dx + shadowOffsetX, point.dy + shadowOffsetY);
-    }).toList();
-    
-    shadowPath.addPolygon(shadowPoints, true);
-    
-    // Draw shadow with gradient for more realistic feel
-    final Paint shadowPaint = Paint()
-      ..style = PaintingStyle.fill
-      ..color = Colors.black.withOpacity(MapStyles.shadowOpacity * tiltFactor);  // Opacity based on tilt
-    
-    canvas.drawPath(shadowPath, shadowPaint);
+    // Return specific color for the building type or default
+    return (themeColors[buildingType]?['wall'] ?? themeColors['default']?['wall'] ?? const Color(0xFFBDBDBD)).withOpacity(opacity);
   }
   
-  // Calculate side color based on "light direction" to simulate lighting
-  Color _calculateSideColor(Offset p1, Offset p2, Color baseColor) {
-    // Simplified directional lighting - sides facing certain directions are darker
-    final dx = p2.dx - p1.dx;
-    final dy = p2.dy - p1.dy;
+  // Helper method to get building type from tags
+  String _getBuildingType(Map<String, dynamic> tags) {
+    final String buildingType = tags['building'] ?? 'yes';
     
-    // Normalize the direction vector
-    final length = math.sqrt(dx * dx + dy * dy);
-    if (length < 1e-6) return baseColor; // Avoid division by zero
+    // Map general building types to our color categories
+    if (buildingType == 'commercial' || buildingType == 'retail' || buildingType == 'shop') {
+      return 'commercial';
+    } else if (buildingType == 'residential' || buildingType == 'house' || buildingType == 'apartments') {
+      return 'residential';
+    } else if (buildingType == 'office') {
+      return 'office';
+    } else if (buildingType == 'industrial' || buildingType == 'warehouse') {
+      return 'industrial';
+    } else if (buildingType == 'school' || buildingType == 'university' || buildingType == 'college') {
+      return 'education';
+    } else if (buildingType == 'hospital' || buildingType == 'healthcare') {
+      return 'healthcare';
+    } else if (buildingType == 'public' || buildingType == 'government' || buildingType == 'civic') {
+      return 'public';
+    } else if (buildingType == 'historic' || buildingType == 'monument') {
+      return 'historic';
+    }
     
-    final nx = dx / length;
-    final ny = dy / length;
+    return buildingType;
+  }
+  
+  // Helper method to get building height from tags
+  double _getBuildingHeight(Map<String, dynamic> tags) {
+    // Default height if not specified
+    double height = 10.0;
     
-    // Light direction vector (45 degrees from top-right)
-    final double lightX = 0.7071;
-    final double lightY = -0.7071;
+    // Parse height from tags if available
+    if (tags.containsKey('height')) {
+      try {
+        height = double.parse(tags['height'] as String);
+      } catch (e) {
+        // If parse fails, use default height
+      }
+    } else if (tags.containsKey('building:levels')) {
+      try {
+        // Approximate 3 meters per level
+        height = double.parse(tags['building:levels'] as String) * 3.0;
+      } catch (e) {
+        // If parse fails, use default height
+      }
+    }
     
-    // Dot product with normal (perpendicular to wall direction)
-    final double dotProduct = ny * lightX - nx * lightY;
+    // Adjust height for special building types
+    final String buildingType = tags['building'] ?? 'yes';
+    if (buildingType == 'cathedral' || buildingType == 'church') {
+      height = height * 1.5;
+    } else if (buildingType == 'skyscraper') {
+      height = height * 2.0;
+    }
     
-    // Adjusted lighting factor based on dot product
-    double factor = 0.5 + dotProduct * 0.5;
-    factor = factor.clamp(0.65, 1.1);
+    return height;
+  }
+  
+  // Gets the roof color based on building type and theme
+  Color _getRoofColor(Map<String, dynamic> tags) {
+    final String buildingType = _getBuildingType(tags);
     
-    // Darken or lighten the base color 
-    if (factor < 1.0) {
-      return Color.lerp(baseColor, Colors.black, 1.0 - factor)!;
+    // Get the color map for the current theme, or fall back to vibrant theme
+    final Map<String, Map<String, Color>>? themeColors = _buildingColorPalette[theme];
+    if (themeColors == null) {
+      return _buildingColorPalette['vibrant']?['default']?['roof'] ?? const Color(0xFF9E9E9E);
+    }
+    
+    // Return specific color for the building type or default
+    return themeColors[buildingType]?['roof'] ?? themeColors['default']?['roof'] ?? const Color(0xFF9E9E9E);
+  }
+  
+  // Draw enhanced building with shadows, gradients, and lighting effects
+  void _drawEnhancedBuilding(
+    Canvas canvas, 
+    Path basePath, 
+    double height, 
+    Color wallColor, 
+    Color roofColor, 
+    List<Offset> points,
+    double zoomLevel,
+    Map<String, dynamic> tags,
+  ) {
+    // Skip if too small
+    if (height < 1.0 || points.length < 3) return;
+    
+    // Calculate projected height based on zoom and tilt
+    final double projectedHeight = height * tiltFactor * (0.12 + (zoomLevel - 15) * 0.04);
+    
+    // Calculate extruded points (top points)
+    final List<Offset> topPoints = points.map((p) => 
+      Offset(p.dx, p.dy - projectedHeight)
+    ).toList();
+    
+    // Calculate centroid (building center point)
+    Offset centroid = Offset.zero;
+    for (final point in points) {
+      centroid += point;
+    }
+    centroid = Offset(centroid.dx / points.length, centroid.dy / points.length);
+    
+    // Get theme-based shadow settings
+    double shadowOpacity = 0.4;
+    double shadowSpread = 12.0;
+    if (theme == 'dark') {
+      shadowOpacity = 0.3;
+      shadowSpread = 15.0;
+    } else if (theme == 'monochrome') {
+      shadowOpacity = 0.5;
+      shadowSpread = 18.0;
+    }
+    
+    // Draw base shadow (for more realistic shading)
+    if (projectedHeight > 2.0) {
+      // Create shadow path (same as base path but slightly larger)
+      final Path shadowPath = Path();
+      shadowPath.addPath(basePath, Offset.zero);
+      
+      // Draw shadow
+      final Paint shadowPaint = Paint()
+        ..shader = RadialGradient(
+          center: const Alignment(0.0, 0.0),
+          radius: 1.0,
+          colors: [
+            Colors.black.withOpacity(shadowOpacity),
+            Colors.black.withOpacity(0.0),
+          ],
+        ).createShader(
+          Rect.fromCircle(
+            center: centroid, 
+            radius: shadowSpread + (projectedHeight * 0.5),
+          ),
+        );
+      
+      canvas.drawPath(shadowPath, shadowPaint);
+    }
+    
+    // Draw the roof first so it gets partially covered by the walls
+    final Path roofPath = Path();
+    roofPath.addPolygon(topPoints, true);
+    
+    // Get sun direction (for lighting)
+    // In a real app, this could be based on actual time of day
+    const double sunAngle = math.pi * 1.25; // 45 degrees from top-right
+    
+    // Roof gradient based on sunlight angle
+    final Gradient roofGradient = LinearGradient(
+      begin: Alignment(math.cos(sunAngle), math.sin(sunAngle)),
+      end: Alignment(-math.cos(sunAngle), -math.sin(sunAngle)),
+      colors: [
+        roofColor.withOpacity(0.95),
+        roofColor.withOpacity(0.7),
+      ],
+    );
+    
+    // Draw roof
+    final Paint roofPaint = Paint()
+      ..shader = roofGradient.createShader(
+        Rect.fromPoints(
+          topPoints.reduce((a, b) => a.dx < b.dx ? a : b),
+          topPoints.reduce((a, b) => a.dx > b.dx ? a : b),
+        ),
+      );
+    
+    canvas.drawPath(roofPath, roofPaint);
+    
+    // Add subtle roof outline
+    final Paint roofOutlinePaint = Paint()
+      ..color = roofColor.withOpacity(0.6)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.5;
+    
+    canvas.drawPath(roofPath, roofOutlinePaint);
+    
+    // Draw walls between each pair of points
+    for (int i = 0; i < points.length; i++) {
+      final int nextIndex = (i + 1) % points.length;
+      
+      final Offset p1 = points[i];
+      final Offset p2 = points[nextIndex];
+      final Offset p3 = topPoints[nextIndex];
+      final Offset p4 = topPoints[i];
+      
+      // Skip if points too close (degenerate wall)
+      if ((p1 - p2).distance < 1.0) continue;
+      
+      // Create wall path
+      final Path wallPath = Path()
+        ..moveTo(p1.dx, p1.dy)
+        ..lineTo(p2.dx, p2.dy)
+        ..lineTo(p3.dx, p3.dy)
+        ..lineTo(p4.dx, p4.dy)
+        ..close();
+      
+      // Calculate wall angle for dynamic lighting
+      final double wallAngle = math.atan2(p2.dy - p1.dy, p2.dx - p1.dx);
+      
+      // Calculate lighting factor based on angle to sun
+      final double angleToSun = (wallAngle - sunAngle) % (math.pi * 2);
+      final double normalizedAngleToSun = angleToSun > math.pi ? 2 * math.pi - angleToSun : angleToSun;
+      final double lightingFactor = 0.5 + 0.5 * math.cos(normalizedAngleToSun);
+      
+      // Apply lighting to wall color
+      Color lightedWallColor = wallColor;
+      if (lightingFactor > 0.7) {
+        // Brighten wall facing the sun
+        lightedWallColor = _brightenColor(wallColor, (lightingFactor - 0.7) * 2.0);
+      } else if (lightingFactor < 0.3) {
+        // Darken wall facing away from sun
+        lightedWallColor = _darkenColor(wallColor, (0.3 - lightingFactor) * 2.0);
+      }
+      
+      // Create wall gradient based on lighting
+      final Gradient wallGradient = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          lightedWallColor.withOpacity(0.95),
+          lightedWallColor.withOpacity(0.85),
+        ],
+      );
+      
+      // Draw wall with gradient
+      final Paint wallPaint = Paint()
+        ..shader = wallGradient.createShader(
+          Rect.fromPoints(p4, p1),
+        );
+      
+      canvas.drawPath(wallPath, wallPaint);
+      
+      // Add subtle edge highlights
+      final Paint edgePaint = Paint()
+        ..color = lightedWallColor.withOpacity(0.7)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8;
+      
+      canvas.drawPath(wallPath, edgePaint);
+      
+      // Add windows on walls if building is big enough and zoom level is sufficient
+      if (projectedHeight >= 5.0 && zoomLevel >= 16.0 && (p1 - p2).distance >= 8.0) {
+        _addWindowsToWall(
+          canvas, 
+          p1, p2, p4, p3, 
+          projectedHeight, 
+          wallColor, 
+          tags,
+        );
+      }
+    }
+    
+    // Draw base outline
+    final Paint outlinePaint = Paint()
+      ..color = wallColor.withOpacity(0.7)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8;
+    
+    canvas.drawPath(basePath, outlinePaint);
+  }
+  
+  // Helper method to add windows to walls
+  void _addWindowsToWall(
+    Canvas canvas, 
+    Offset bottom1, 
+    Offset bottom2, 
+    Offset top1, 
+    Offset top2,
+    double projectedHeight,
+    Color baseColor,
+    Map<String, dynamic> tags,
+  ) {
+    // Calculate wall width and height
+    final double wallWidth = (bottom2 - bottom1).distance;
+    final double wallHeight = projectedHeight;
+    
+    // Skip small walls
+    if (wallWidth < 10.0 || wallHeight < 6.0) return;
+    
+    // Calculate window spacing
+    final int floorsCount = math.max(1, (wallHeight / 4.0).floor());
+    final int windowsPerRow = math.max(1, (wallWidth / 6.0).floor());
+    
+    // Adjust window size based on zoom
+    final double windowWidth = math.min(5.0, (wallWidth / windowsPerRow) * 0.7);
+    final double windowHeight = math.min(3.0, (wallHeight / floorsCount) * 0.7);
+    
+    // Window margin
+    final double hMargin = (wallWidth - (windowWidth * windowsPerRow)) / (windowsPerRow + 1);
+    final double vMargin = (wallHeight - (windowHeight * floorsCount)) / (floorsCount + 1);
+    
+    // Calculate wall direction and perpendicular vector for proper window placement
+    final Offset wallDirection = (bottom2 - bottom1).normalize();
+    final Offset wallPerp = Offset(-wallDirection.dy, wallDirection.dx);
+    
+    // Window colors - night vs day
+    final DateTime now = DateTime.now();
+    final bool isNight = now.hour < 6 || now.hour > 18;
+    
+    // Generate random window patterns based on building type
+    final String buildingType = tags['building'] ?? 'yes';
+    bool hasUniformWindows = buildingType == 'office' || 
+                           buildingType == 'commercial' || 
+                           buildingType == 'apartments';
+    
+    // Window colors
+    Color windowColor;
+    Color windowLitColor;
+    
+    if (isNight) {
+      // Night colors
+      windowColor = const Color(0xFF1F2937);
+      windowLitColor = const Color(0xFFFFE082).withOpacity(0.85);
     } else {
-      return Color.lerp(baseColor, Colors.white, factor - 1.0)!;
+      // Day colors - slight blue tint for glass reflection
+      windowColor = const Color(0xFF90CAF9).withOpacity(0.7);
+      windowLitColor = const Color(0xFFFFFFFF).withOpacity(0.9);
     }
-  }
-  
-  // Draw windows on building sides for added realism
-  void _drawWindows(Canvas canvas, List<Offset> basePoints, List<Offset> roofPoints, double buildingHeight) {
-    // Window settings
-    final double windowWidth = 3.0;
-    final double windowHeight = 4.0;
-    final double windowSpacingH = 5.0;
-    final double windowSpacingV = 7.0;
     
     // Window paint
     final Paint windowPaint = Paint()
-      ..style = PaintingStyle.fill
-      ..color = Colors.white.withOpacity(0.15); // Subtle window glow
+      ..color = windowColor;
     
-    // For each building side
-    for (int i = 0; i < basePoints.length; i++) {
-      final int nextIndex = (i + 1) % basePoints.length;
-      
-      final Offset p1 = basePoints[i];
-      final Offset p2 = basePoints[nextIndex];
-      final Offset p3 = roofPoints[nextIndex];
-      final Offset p4 = roofPoints[i];
-      
-      // Skip very short walls
-      final double wallLength = (p2 - p1).distance;
-      if (wallLength < 15) continue;
-      
-      // Skip nearly horizontal or vertical walls (they'll look strange with windows)
-      final double dx = (p2.dx - p1.dx).abs();
-      final double dy = (p2.dy - p1.dy).abs();
-      if (dx < 1 || dy < 1) continue;
-      
-      // Calculate the wall direction vector
-      double dirX = (p2.dx - p1.dx) / wallLength;
-      double dirY = (p2.dy - p1.dy) / wallLength;
-      
-      // Calculate how many windows fit horizontally and vertically
-      final int numWindowsH = (wallLength / (windowWidth + windowSpacingH)).floor();
-      final int numWindowsV = (buildingHeight / (windowHeight + windowSpacingV)).floor();
-      
-      // If the wall is too small, skip window rendering
-      if (numWindowsH < 1 || numWindowsV < 1) continue;
-      
-      // Actual spacing to distribute windows evenly
-      final double actualSpacingH = (wallLength - (numWindowsH * windowWidth)) / (numWindowsH + 1);
-      final double actualSpacingV = (buildingHeight - (numWindowsV * windowHeight)) / (numWindowsV + 1);
-      
-      // Draw grid of windows
-      for (int col = 0; col < numWindowsH; col++) {
-        for (int row = 0; row < numWindowsV; row++) {
-          // Light up random windows (some on, some off)
-          if (_random.nextDouble() > 0.7) { // 30% of windows are lit
-            // Position along the wall
-            final double posH = actualSpacingH + col * (windowWidth + actualSpacingH);
-            final double posV = actualSpacingV + row * (windowHeight + actualSpacingV);
-            
-            // Calculate window position
-            final double windowX = p1.dx + posH * dirX;
-            final double windowY = p1.dy + posH * dirY;
-            
-            // Draw window rectangle
-            final Rect windowRect = Rect.fromLTWH(
-              windowX - (windowWidth / 2), 
-              windowY - (windowHeight / 2) - posV, 
-              windowWidth, 
-              windowHeight
-            );
-            
-            canvas.drawRect(windowRect, windowPaint);
-          }
+    // Window light paint - with radial gradient for glow effect
+    final Paint windowLitPaint = Paint()
+      ..color = windowLitColor;
+    
+    // Determine window probability
+    double litProbability = isNight ? 0.3 : 0.05;
+    
+    // Different patterns for different building types
+    if (buildingType == 'office') {
+      litProbability = isNight ? 0.5 : 0.2;
+    } else if (buildingType == 'residential') {
+      litProbability = isNight ? 0.4 : 0.1;
+    }
+    
+    // Draw windows
+    for (int floor = 0; floor < floorsCount; floor++) {
+      for (int win = 0; win < windowsPerRow; win++) {
+        // Offset from bottom-left of wall
+        final double xOffset = hMargin + win * (windowWidth + hMargin);
+        final double yOffset = vMargin + floor * (windowHeight + vMargin);
+        
+        // Start position (offset from bottom1 along wall direction)
+        final Offset startPos = bottom1 + (wallDirection * xOffset);
+        
+        // Window position (offset upward perpendicular to wall)
+        final Offset windowPos = startPos - (wallPerp * (yOffset + windowHeight));
+        
+        // Create window rect
+        final Rect windowRect = Rect.fromLTWH(
+          windowPos.dx, 
+          windowPos.dy, 
+          windowWidth, 
+          windowHeight
+        );
+        
+        // Randomly decide if window is lit
+        final bool isLit = _random.nextDouble() < litProbability;
+        
+        // Draw window
+        if (hasUniformWindows) {
+          // Regular window pattern for office/commercial buildings
+          canvas.drawRect(windowRect, isLit ? windowLitPaint : windowPaint);
+        } else {
+          // More varied windows for other buildings
+          final double cornerRadius = windowHeight * 0.2;
+          final RRect roundedRect = RRect.fromRectAndRadius(
+            windowRect, 
+            Radius.circular(cornerRadius)
+          );
+          canvas.drawRRect(roundedRect, isLit ? windowLitPaint : windowPaint);
         }
       }
     }
   }
   
-  // Calculate center point of a building for sorting/positioning
-  LatLng _calculateCenter(List<LatLng> points) {
-    if (points.isEmpty) return const LatLng(0, 0);
-    
-    double sumLat = 0;
-    double sumLng = 0;
-    
-    for (final point in points) {
-      sumLat += point.latitude;
-      sumLng += point.longitude;
-    }
-    
-    return LatLng(sumLat / points.length, sumLng / points.length);
+  // Helper methods for color manipulation
+  Color _brightenColor(Color color, double factor) {
+    // Increase color brightness
+    final double amount = factor * 60;
+    return Color.fromARGB(
+      color.alpha,
+      math.min(255, color.red + amount.toInt()),
+      math.min(255, color.green + amount.toInt()),
+      math.min(255, color.blue + amount.toInt()),
+    );
   }
   
-  // Add small variations to colors for visual interest
-  Color _variateColor(Color color) {
-    // Add slight variation to create more natural appearance
-    final int variation = (_random.nextInt(15) - 7); // -7 to +7 variation
-    
-    // Apply variation to each color component
-    int r = (color.red + variation).clamp(0, 255);
-    int g = (color.green + variation).clamp(0, 255);
-    int b = (color.blue + variation).clamp(0, 255);
-    
-    return Color.fromARGB(color.alpha, r, g, b);
+  Color _darkenColor(Color color, double factor) {
+    // Decrease color brightness
+    final double amount = factor * 40;
+    return Color.fromARGB(
+      color.alpha,
+      math.max(0, color.red - amount.toInt()),
+      math.max(0, color.green - amount.toInt()),
+      math.max(0, color.blue - amount.toInt()),
+    );
   }
   
   @override
-  bool shouldRepaint(OSMBuildingsPainter oldDelegate) {
+  bool shouldRepaint(covariant OSMBuildingsPainter oldDelegate) {
     return oldDelegate.buildings != buildings ||
            oldDelegate.tiltFactor != tiltFactor ||
            oldDelegate.zoomLevel != zoomLevel ||
-           oldDelegate.mapBounds != mapBounds;
+           oldDelegate.visibleBounds != visibleBounds ||
+           oldDelegate.theme != theme;
   }
 } 

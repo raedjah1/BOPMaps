@@ -11,12 +11,14 @@ class OSMRoadsLayer extends StatefulWidget {
   final double tiltFactor;
   final double zoomLevel;
   final LatLngBounds visibleBounds;
+  final bool isMapMoving;
   
   const OSMRoadsLayer({
     Key? key,
     this.tiltFactor = 1.0,
     required this.zoomLevel,
     required this.visibleBounds,
+    this.isMapMoving = false,
   }) : super(key: key);
 
   @override
@@ -27,23 +29,45 @@ class _OSMRoadsLayerState extends State<OSMRoadsLayer> {
   final OSMDataProcessor _dataProcessor = OSMDataProcessor();
   List<Map<String, dynamic>> _roads = [];
   bool _isLoading = true;
+  bool _needsRefresh = true;
+  String _lastBoundsKey = "";
   
-  // Road colors by type
+  // Enhanced road colors with vibrant, complementary palette
   final Map<String, Color> _roadColors = {
-    'motorway': const Color(0xFFE67E22),
-    'trunk': const Color(0xFFE74C3C),
-    'primary': const Color(0xFFF39C12),
-    'secondary': const Color(0xFFF1C40F),
-    'tertiary': const Color(0xFFFFFFFF),
-    'residential': const Color(0xFFECF0F1),
-    'service': const Color(0xFFBDC3C7),
-    'unclassified': const Color(0xFFBDC3C7),
-    'living_street': const Color(0xFFD5DBDB),
-    'pedestrian': const Color(0xFF85929E),
-    'footway': const Color(0xFFCE93D8),
-    'cycleway': const Color(0xFF4DB6AC),
-    'path': const Color(0xFFBCAAA4),
-    'track': const Color(0xFFBCAAA4),
+    'motorway': const Color(0xFFE91E63).withOpacity(0.8),  // Pink/magenta for motorways
+    'trunk': const Color(0xFFEC407A).withOpacity(0.7),     // Lighter pink for trunk roads
+    'primary': const Color(0xFFF48FB1).withOpacity(0.65),   // Pale pink for primary roads
+    'secondary': const Color(0xFFF8BBD0).withOpacity(0.6), // Very light pink for secondary
+    'tertiary': const Color(0xFFFFFFFF).withOpacity(0.5),  // White with more opacity for tertiary
+    'residential': const Color(0xFFECEFF1).withOpacity(0.4), // Increased opacity for better visibility
+    'service': const Color(0xFFCFD8DC).withOpacity(0.35),   // Light gray for service roads
+    'unclassified': const Color(0xFFBDBDBD).withOpacity(0.3), // Medium gray for unclassified
+    'living_street': const Color(0xFFB0BEC5).withOpacity(0.35), // Blue-gray for living streets
+    'pedestrian': const Color(0xFFAED581).withOpacity(0.35),  // Light green for pedestrian ways
+    'footway': const Color(0xFFCE93D8).withOpacity(0.35),     // Light purple for footways
+    'cycleway': const Color(0xFF4DB6AC).withOpacity(0.35),    // Teal for cycleways
+    'path': const Color(0xFFD7CCC8).withOpacity(0.35),        // Beige for paths
+    'track': const Color(0xFFBCAAA4).withOpacity(0.35),       // Brown for tracks
+  };
+  
+  // Time of day color variations for roads
+  final Map<String, Map<String, Color>> _timeOfDayRoadColors = {
+    'morning': {
+      'motorway': const Color(0xFFF06292).withOpacity(0.8),  // Softer pink in morning light
+      'primary': const Color(0xFFF8BBD0).withOpacity(0.65),  // Very soft pink in morning
+    },
+    'noon': {
+      'motorway': const Color(0xFFE91E63).withOpacity(0.8),  // Bold pink at noon
+      'primary': const Color(0xFFF48FB1).withOpacity(0.65),  // Standard pink at noon
+    },
+    'evening': {
+      'motorway': const Color(0xFFD81B60).withOpacity(0.75), // Darker pink in evening
+      'primary': const Color(0xFFAD1457).withOpacity(0.6),   // Deep pink in evening
+    },
+    'night': {
+      'motorway': const Color(0xFFC2185B).withOpacity(0.6),  // Muted pink at night
+      'primary': const Color(0xFF880E4F).withOpacity(0.5),   // Very dark pink at night
+    },
   };
   
   @override
@@ -56,16 +80,53 @@ class _OSMRoadsLayerState extends State<OSMRoadsLayer> {
   void didUpdateWidget(OSMRoadsLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     
-    // Fetch new road data when map bounds change significantly
-    if (oldWidget.visibleBounds != widget.visibleBounds) {
-      _fetchRoads();
+    // Get a key to identify current map bounds
+    final newBoundsKey = _getBoundsKey();
+    
+    // Fetch new road data when map bounds change significantly or zoom changes
+    if (oldWidget.visibleBounds != widget.visibleBounds || 
+        oldWidget.zoomLevel != widget.zoomLevel ||
+        _lastBoundsKey != newBoundsKey) {
+      
+      _needsRefresh = true;
+      
+      // If map is actively moving, delay the fetch to avoid too many API calls
+      if (widget.isMapMoving) {
+        _delayedFetch();
+      } else {
+        _fetchRoads();
+      }
     }
+  }
+  
+  // Get a key to identify current map bounds, with reduced precision for fewer unnecessary refreshes
+  String _getBoundsKey() {
+    final sw = widget.visibleBounds.southWest;
+    final ne = widget.visibleBounds.northEast;
+    
+    // Reduce precision for bounds (3 decimal places ≈ 100m accuracy)
+    final key = '${sw.latitude.toStringAsFixed(3)},${sw.longitude.toStringAsFixed(3)}_'
+               '${ne.latitude.toStringAsFixed(3)},${ne.longitude.toStringAsFixed(3)}_'
+               '${widget.zoomLevel.toStringAsFixed(1)}';
+    return key;
+  }
+  
+  // Delay fetch to prevent excessive API calls during continuous panning/zooming
+  void _delayedFetch() {
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted && _needsRefresh) {
+        _fetchRoads();
+      }
+    });
   }
   
   void _fetchRoads() async {
     setState(() {
       _isLoading = true;
     });
+    
+    // Update bounds key
+    _lastBoundsKey = _getBoundsKey();
     
     // Use the map bounds to fetch roads
     final southwest = widget.visibleBounds.southWest;
@@ -77,6 +138,7 @@ class _OSMRoadsLayerState extends State<OSMRoadsLayer> {
       setState(() {
         _roads = roads;
         _isLoading = false;
+        _needsRefresh = false;
       });
     }
   }
@@ -217,13 +279,17 @@ class OSMRoadsPainter extends CustomPainter {
       roadPath.lineTo(points[i].dx, points[i].dy);
     }
     
+    // Enhanced styling for different road types
+    final Color borderColor = _getBorderColorForRoad(color);
+    final double borderWidth = width + 1.5; // Increased border width
+    
     // Draw road with a border
     final Paint borderPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = width + 1.0
+      ..strokeWidth = borderWidth
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
-      ..color = Colors.black.withOpacity(0.5);
+      ..color = borderColor;
     
     canvas.drawPath(roadPath, borderPaint);
     
@@ -238,7 +304,33 @@ class OSMRoadsPainter extends CustomPainter {
     canvas.drawPath(roadPath, roadPaint);
   }
   
-  /// Add details to main roads like lane markings
+  /// Get border color based on road color (more sophisticated border effect)
+  Color _getBorderColorForRoad(Color roadColor) {
+    // For pink/magenta roads, use a darker pink border
+    if (roadColor.red > 200 && roadColor.green < 150) {
+      return const Color(0xFF880E4F).withOpacity(0.5); // Dark pink border
+    }
+    
+    // For white/light gray roads, use a medium gray border
+    if (roadColor.red > 220 && roadColor.green > 220 && roadColor.blue > 220) {
+      return const Color(0xFF757575).withOpacity(0.5); // Medium gray border
+    }
+    
+    // For light green (pedestrian)
+    if (roadColor.green > 180 && roadColor.red < 180) {
+      return const Color(0xFF33691E).withOpacity(0.4); // Dark green border
+    }
+    
+    // For light purple (footways)
+    if (roadColor.red > 180 && roadColor.blue > 180 && roadColor.green < 150) {
+      return const Color(0xFF6A1B9A).withOpacity(0.4); // Dark purple border
+    }
+    
+    // Default dark border
+    return Colors.black.withOpacity(0.4);
+  }
+  
+  /// Add details to main roads like lane markings with enhanced styling
   void _addRoadDetails(Canvas canvas, List<Offset> points, double width, String roadType) {
     if (points.length < 2) return;
     
@@ -257,23 +349,95 @@ class OSMRoadsPainter extends CustomPainter {
       // Lane marking style based on road type
       final bool isDashed = roadType != 'motorway' && roadType != 'trunk';
       
-      // Create lane marking paint
+      // Enhanced lane marking colors based on road type
+      Color markingColor;
+      if (roadType == 'motorway' || roadType == 'trunk') {
+        markingColor = Colors.white.withOpacity(0.85); // Brighter white for highways
+      } else if (roadType == 'primary') {
+        markingColor = Colors.white.withOpacity(0.75); // White for primary roads
+      } else {
+        markingColor = Colors.white.withOpacity(0.65); // Standard white for other roads
+      }
+      
+      // Create lane marking paint with enhanced styling
       final Paint markingPaint = Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0
-        ..color = Colors.yellow.withOpacity(0.7);
+        ..strokeWidth = roadType == 'motorway' ? 1.2 : 0.9 // Thicker lines for highways
+        ..color = markingColor;
       
       // Apply dashed effect for appropriate road types
       if (isDashed) {
-        markingPaint.strokeWidth = 0.8;
-        markingPaint.color = Colors.white.withOpacity(0.6);
-        
         // Draw dashed line
         _drawDashedLine(canvas, points, markingPaint);
       } else {
         // Draw solid line for motorways/trunks
         canvas.drawPath(centerPath, markingPaint);
+        
+        // For motorways, add an additional lane line if the road is wide enough
+        if (roadType == 'motorway' && width > 7.0) {
+          _addMultipleLanes(canvas, points, width, markingPaint);
+        }
       }
+    }
+  }
+  
+  /// Add multiple lane markings for wide highways
+  void _addMultipleLanes(Canvas canvas, List<Offset> points, double width, Paint markingPaint) {
+    if (points.length < 4) return; // Need more points for realistic offset
+    
+    // Calculate lane offsets (perpendicular to road direction)
+    final List<List<Offset>> laneOffsets = [];
+    const int lanesCount = 2; // Number of lane markings
+    
+    for (int lane = 1; lane <= lanesCount; lane++) {
+      final List<Offset> lanePoints = [];
+      final double lanePosition = width * 0.33 * lane; // Position each lane at 1/3 and 2/3 of width
+      
+      for (int i = 1; i < points.length - 1; i++) {
+        // Calculate perpendicular vector
+        final Offset prev = points[i - 1];
+        final Offset curr = points[i];
+        final Offset next = points[i + 1];
+        
+        // Direction vector along the road
+        final Offset dir = Offset(
+          (next.dx - prev.dx) / 2,
+          (next.dy - prev.dy) / 2,
+        );
+        
+        // Normalize the direction vector manually
+        final double dirLength = math.sqrt(dir.dx * dir.dx + dir.dy * dir.dy);
+        final Offset normalizedDir = dirLength > 0 
+            ? Offset(dir.dx / dirLength, dir.dy / dirLength)
+            : Offset(0, 0);
+        
+        // Perpendicular vector (rotate 90 degrees)
+        final Offset perp = Offset(-normalizedDir.dy, normalizedDir.dx);
+        
+        // Alternate sides for more natural looking lanes
+        final double sideMultiplier = (i % 2 == 0) ? 1 : -1;
+        
+        // Offset this point
+        lanePoints.add(Offset(
+          curr.dx + perp.dx * lanePosition * sideMultiplier,
+          curr.dy + perp.dy * lanePosition * sideMultiplier,
+        ));
+      }
+      
+      laneOffsets.add(lanePoints);
+    }
+    
+    // Draw each lane marking
+    for (final lanePoints in laneOffsets) {
+      // Create a new Paint instance with the desired properties instead of using copyWith
+      final Paint lanePaint = Paint()
+        ..style = markingPaint.style
+        ..strokeWidth = 0.8 // Slightly thinner for lane lines
+        ..strokeCap = markingPaint.strokeCap
+        ..strokeJoin = markingPaint.strokeJoin
+        ..color = Colors.white.withOpacity(0.5); // More transparent
+      
+      _drawDashedLine(canvas, lanePoints, lanePaint);
     }
   }
   

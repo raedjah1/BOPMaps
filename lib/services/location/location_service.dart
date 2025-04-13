@@ -49,13 +49,15 @@ class LocationService {
   }
 
   // Stream position updates
-  Stream<Position> getPositionStream() {
-    const LocationSettings locationSettings = LocationSettings(
+  Stream<Position> getPositionStream({LocationSettings? locationSettings}) {
+    const defaultLocationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
       distanceFilter: 10, // Minimum distance (in meters) before updates
     );
 
-    return Geolocator.getPositionStream(locationSettings: locationSettings);
+    return Geolocator.getPositionStream(
+      locationSettings: locationSettings ?? defaultLocationSettings
+    );
   }
 
   // Calculate distance between two coordinates

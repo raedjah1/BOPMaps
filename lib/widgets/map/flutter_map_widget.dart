@@ -14,42 +14,44 @@ import 'map_layers/buildings_layer.dart';
 import 'map_layers/trees_layer.dart';
 import 'map_layers/osm_buildings_layer.dart';
 import 'map_layers/osm_roads_layer.dart';
-import 'map_layers/osm_water_layer.dart';
-import 'map_layers/osm_landscape_layer.dart';
 import 'map_layers/osm_data_processor.dart';
+import 'user_location_marker.dart';
+import 'map_styles.dart';
 
 class FlutterMapWidget extends StatefulWidget {
   final MapProvider mapProvider;
   final Function(Map<String, dynamic>) onPinTap;
-  final bool showWaterBodies;
-  final bool showLandscapeFeatures;
-  final Color waterColor;
-  final Color landscapeColor;
 
   const FlutterMapWidget({
     Key? key,
     required this.mapProvider,
     required this.onPinTap,
-    this.showWaterBodies = true,
-    this.showLandscapeFeatures = true,
-    this.waterColor = const Color(0xFF2A93D5),
-    this.landscapeColor = const Color(0xFF62A87C),
   }) : super(key: key);
 
   @override
-  State<FlutterMapWidget> createState() => _FlutterMapWidgetState();
+  FlutterMapWidgetState createState() => FlutterMapWidgetState();
 }
 
-class _FlutterMapWidgetState extends State<FlutterMapWidget> with SingleTickerProviderStateMixin {
+// Make the class public but keep the original name for compatibility
+class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   final PopupController _popupController = PopupController();
   
   // Variables for the 2.5D effect
-  double _tiltAngle = 0.35; // Initial tilt angle in radians (approx 20 degrees)
-  double _rotationAngle = 0.0; // Rotation angle in radians
+  double _tiltAngle = MapStyles.defaultTiltAngle; // Use consistent tilt from styles
+  double _rotationAngle = MapStyles.defaultRotationAngle; // Use consistent rotation from styles
   late AnimationController _animationController;
   late Animation<double> _tiltAnimation;
   
+  // Public accessor for tilt animation value
+  Animation<double> get tiltAnimation => _tiltAnimation;
+  
+  // Animation controllers for smooth movement
+  AnimationController? _moveAnimationController;
+  Animation<double>? _latAnimation;
+  Animation<double>? _lngAnimation;
+  Animation<double>? _zoomAnimation;
+
   // Building detail level - initialize with a default
   int _buildingDetailLevel = 2;
   bool _isMapInitialized = false;
@@ -58,13 +60,16 @@ class _FlutterMapWidgetState extends State<FlutterMapWidget> with SingleTickerPr
   // Flag to toggle between decorative and real OSM 2.5D layers
   bool _useRealOSMData = true; // Changed from false to true to use real data by default
   
+  // Flag to handle fallback tiles
+  bool _isUsingFallbackTiles = false;
+  
   @override
   void initState() {
     super.initState();
     
     // Initialize the animation controller for tilt effect
     _animationController = AnimationController(
-      duration: const Duration(milliseconds: 500),
+      duration: MapStyles.tiltAnimationDuration,
       vsync: this,
     );
     
@@ -101,6 +106,7 @@ class _FlutterMapWidgetState extends State<FlutterMapWidget> with SingleTickerPr
   @override
   void dispose() {
     _animationController.dispose();
+    _moveAnimationController?.dispose();
     _mapController.dispose();
     super.dispose();
   }
@@ -121,7 +127,7 @@ class _FlutterMapWidgetState extends State<FlutterMapWidget> with SingleTickerPr
                 // Adjust tilt on vertical drag
                 final newTilt = _tiltAngle - details.delta.dy * 0.01;
                 // Limit tilt range for good UX
-                if (newTilt >= 0 && newTilt <= 0.7) {
+                if (newTilt >= 0 && newTilt <= MapStyles.maxTiltAngle) {
                   setState(() {
                     _tiltAngle = newTilt;
                     _tiltAnimation = Tween<double>(
@@ -142,224 +148,317 @@ class _FlutterMapWidgetState extends State<FlutterMapWidget> with SingleTickerPr
                   _rotationAngle += details.delta.dx * 0.005;
                 });
               },
-              child: Transform(
-                // Apply a perspective transformation for 2.5D effect
-                transform: _build25DMatrix(),
-                alignment: Alignment.center,
-                child: Container(
-                  // Add a subtle shadow to enhance the 3D effect
-                  decoration: BoxDecoration(
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.4 * _tiltAnimation.value),
-                        blurRadius: 30.0 * _tiltAnimation.value,
-                        offset: Offset(0, 15.0 * _tiltAnimation.value),
-                      ),
-                    ],
-                  ),
-                  child: ClipRect(
-                    child: Stack(
-                      children: [
-                        // The actual map
-                        PopupScope(
-                          popupController: _popupController,
-                          child: FlutterMap(
-                            mapController: _mapController,
-                            options: MapOptions(
-                              initialCenter: LatLng(
-                                AppConstants.defaultLatitude,
-                                AppConstants.defaultLongitude
-                              ),
-                              initialZoom: AppConstants.defaultZoom,
-                              minZoom: 2.0, // Set lower minimum zoom to allow seeing more of the world
-                              maxZoom: 19.0, // Allow high zoom for detail
-                              onMapEvent: _handleMapEvent,
-                              // Add rotation for the map itself
-                              rotation: _rotationAngle,
-                              interactionOptions: const InteractionOptions(
-                                enableScrollWheel: true,
-                                enableMultiFingerGestureRace: true,
-                                flags: InteractiveFlag.all, // Enable all interactions
-                              ),
-                              maxBounds: null, // Remove bounds restriction
-                            ),
-                            children: [
-                              // Base tile layer (modern styled map)
-                              TileLayer(
-                                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                userAgentPackageName: 'com.example.bopmaps',
-                                backgroundColor: const Color(0xFF121212),
-                                tileBuilder: (context, child, tile) {
-                                  return Opacity(
-                                    opacity: 0.8 + (0.2 * _tiltAnimation.value),
-                                    child: child,
-                                  );
-                                },
-                              ),
-                              
-                              // Either use real OSM data or decorative layers based on the toggle
-                              if (_useRealOSMData) ...[
-                                // Real OSM Landscape Layer with 2.5D effects (parks, forests)
-                                if (widget.showLandscapeFeatures)
-                                  OSMLandscapeLayer(
-                                    tiltFactor: _tiltAnimation.value,
-                                    zoomLevel: _isMapInitialized ? _mapController.camera.zoom : AppConstants.defaultZoom,
-                                    visibleBounds: _isMapInitialized 
-                                        ? _mapController.camera.visibleBounds
-                                        : LatLngBounds(
-                                            LatLng(
-                                              AppConstants.defaultLatitude - 0.05, 
-                                              AppConstants.defaultLongitude - 0.05,
-                                            ),
-                                            LatLng(
-                                              AppConstants.defaultLatitude + 0.05, 
-                                              AppConstants.defaultLongitude + 0.05,
-                                            ),
-                                          ),
-                                    parkColor: widget.landscapeColor,
-                                    forestColor: widget.landscapeColor.withOpacity(0.8),
-                                    grasslandColor: widget.landscapeColor.withOpacity(0.9),
-                                  ),
-                                
-                                // Real OSM Water Bodies Layer with 2.5D effects (lakes, rivers)
-                                if (widget.showWaterBodies)
-                                  OSMWaterLayer(
-                                    tiltFactor: _tiltAnimation.value,
-                                    zoomLevel: _isMapInitialized ? _mapController.camera.zoom : AppConstants.defaultZoom,
-                                    visibleBounds: _isMapInitialized 
-                                        ? _mapController.camera.visibleBounds
-                                        : LatLngBounds(
-                                            LatLng(
-                                              AppConstants.defaultLatitude - 0.05, 
-                                              AppConstants.defaultLongitude - 0.05,
-                                            ),
-                                            LatLng(
-                                              AppConstants.defaultLatitude + 0.05, 
-                                              AppConstants.defaultLongitude + 0.05,
-                                            ),
-                                          ),
-                                    waterColor: widget.waterColor,
-                                    waterHighlightColor: widget.waterColor.withOpacity(0.8),
-                                    riverColor: widget.waterColor.withOpacity(0.9),
-                                  ),
-                                
-                                // Real OSM Roads Layer with 2.5D effects
-                                OSMRoadsLayer(
-                                  tiltFactor: _tiltAnimation.value,
-                                  zoomLevel: _isMapInitialized ? _mapController.camera.zoom : AppConstants.defaultZoom,
-                                  visibleBounds: _isMapInitialized 
-                                      ? _mapController.camera.visibleBounds
-                                      : LatLngBounds(
-                                          LatLng(
-                                            AppConstants.defaultLatitude - 0.05, 
-                                            AppConstants.defaultLongitude - 0.05,
-                                          ),
-                                          LatLng(
-                                            AppConstants.defaultLatitude + 0.05, 
-                                            AppConstants.defaultLongitude + 0.05,
-                                          ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  // Apply perspective transformation for the 2.5D effect
+                  return Transform(
+                    alignment: Alignment.center,
+                    transform: _build25DMatrix(),
+                    child: Container(
+                      // Make container larger to accommodate for the tilt effect
+                      width: constraints.maxWidth * (1 + _tiltAnimation.value * 0.3),
+                      height: constraints.maxHeight * (1 + _tiltAnimation.value * 0.3),
+                      alignment: Alignment.center,
+                      child: ClipRRect(
+                        child: OverflowBox(
+                          alignment: Alignment.center,
+                          maxWidth: constraints.maxWidth * (1 + _tiltAnimation.value * 0.3),
+                          maxHeight: constraints.maxHeight * (1 + _tiltAnimation.value * 0.3),
+                          child: SizedBox(
+                            width: constraints.maxWidth,
+                            height: constraints.maxHeight,
+                            child: Stack(
+                              children: [
+                                PopupScope(
+                                  popupController: _popupController,
+                                  child: FlutterMap(
+                                    mapController: _mapController,
+                                    options: MapOptions(
+                                      initialCenter: LatLng(
+                                        AppConstants.defaultLatitude,
+                                        AppConstants.defaultLongitude
+                                      ),
+                                      initialZoom: AppConstants.defaultZoom,
+                                      minZoom: 2.0, // Set lower minimum zoom to allow seeing more of the world
+                                      maxZoom: 19.0, // Allow high zoom for detail
+                                      onMapEvent: _handleMapEvent,
+                                      // Add rotation for the map itself
+                                      rotation: _rotationAngle,
+                                      interactionOptions: const InteractionOptions(
+                                        enableScrollWheel: true,
+                                        enableMultiFingerGestureRace: true,
+                                        flags: InteractiveFlag.all, // Enable all interactions
+                                      ),
+                                      maxBounds: null, // Remove bounds restriction
+                                    ),
+                                    children: [
+                                      // Base tile layer (Uber-like styled map)
+                                      TileLayer(
+                                        urlTemplate: MapStyles.darkMapTileUrl,
+                                        userAgentPackageName: 'com.example.bopmaps',
+                                        backgroundColor: MapStyles.backgroundColor,
+                                        retinaMode: true,
+                                        tileBuilder: (context, child, tile) {
+                                          return Opacity(
+                                            opacity: 0.8 + (0.2 * _tiltAnimation.value),
+                                            child: child,
+                                          );
+                                        },
+                                        // Add error handling for the TileLayer
+                                        errorTileCallback: (tile, error, stackTrace) {
+                                          debugPrint('Tile error: $error - Using fallback tile source');
+                                          // We can't use fallbackUrls directly, but we can handle errors manually
+                                          // and rebuild the layer with a different URL if needed
+                                          if (!_isUsingFallbackTiles && mounted) {
+                                            setState(() {
+                                              _isUsingFallbackTiles = true;
+                                            });
+                                          }
+                                        },
+                                        // Use a different templateUrl if fallback is active
+                                        errorImage: const NetworkImage('https://tile.openstreetmap.org/1/1/1.png'),
+                                      ),
+                                      
+                                      // Fallback tile layer that only shows if primary fails
+                                      if (_isUsingFallbackTiles)
+                                        TileLayer(
+                                          urlTemplate: MapStyles.fallbackMapTileUrl,
+                                          userAgentPackageName: 'com.example.bopmaps',
+                                          backgroundColor: MapStyles.backgroundColor,
+                                          retinaMode: true,
+                                          tileBuilder: (context, child, tile) {
+                                            return Opacity(
+                                              opacity: 0.8 + (0.2 * _tiltAnimation.value),
+                                              child: child,
+                                            );
+                                          },
                                         ),
-                                ),
-                                
-                                // Real OSM Buildings Layer with 2.5D effects
-                                OSMBuildingsLayer(
-                                  buildingBaseColor: const Color(0xFF323232),
-                                  buildingTopColor: const Color(0xFF4A4A4A),
-                                  tiltFactor: _tiltAnimation.value,
-                                  zoomLevel: _isMapInitialized ? _mapController.camera.zoom : AppConstants.defaultZoom,
-                                  visibleBounds: _isMapInitialized 
-                                      ? _mapController.camera.visibleBounds
-                                      : LatLngBounds(
-                                          LatLng(
-                                            AppConstants.defaultLatitude - 0.05, 
-                                            AppConstants.defaultLongitude - 0.05,
-                                          ),
-                                          LatLng(
-                                            AppConstants.defaultLatitude + 0.05, 
-                                            AppConstants.defaultLongitude + 0.05,
-                                          ),
+                                      
+                                      // Either use real OSM data or decorative layers based on the toggle
+                                      if (_useRealOSMData) ...[
+                                        // Real OSM Roads Layer with 2.5D effects
+                                        OSMRoadsLayer(
+                                          tiltFactor: _tiltAnimation.value,
+                                          zoomLevel: _isMapInitialized ? _mapController.camera.zoom : AppConstants.defaultZoom,
+                                          visibleBounds: _isMapInitialized 
+                                              ? _mapController.camera.visibleBounds
+                                              : LatLngBounds(
+                                                  LatLng(
+                                                    AppConstants.defaultLatitude - 0.05, 
+                                                    AppConstants.defaultLongitude - 0.05,
+                                                  ),
+                                                  LatLng(
+                                                    AppConstants.defaultLatitude + 0.05, 
+                                                    AppConstants.defaultLongitude + 0.05,
+                                                  ),
+                                                ),
                                         ),
+                                        
+                                        // Real OSM Buildings Layer with 2.5D effects
+                                        OSMBuildingsLayer(
+                                          buildingBaseColor: MapStyles.buildingBaseColor,
+                                          buildingTopColor: MapStyles.buildingTopColor,
+                                          tiltFactor: _tiltAnimation.value,
+                                          zoomLevel: _isMapInitialized ? _mapController.camera.zoom : AppConstants.defaultZoom,
+                                          visibleBounds: _isMapInitialized 
+                                              ? _mapController.camera.visibleBounds
+                                              : LatLngBounds(
+                                                  LatLng(
+                                                    AppConstants.defaultLatitude - 0.05, 
+                                                    AppConstants.defaultLongitude - 0.05,
+                                                  ),
+                                                  LatLng(
+                                                    AppConstants.defaultLatitude + 0.05, 
+                                                    AppConstants.defaultLongitude + 0.05,
+                                                  ),
+                                                ),
+                                        ),
+                                      ],
+                                      
+                                      // Markers cluster layer for pins with improved visuals
+                                      MarkerClusterLayerWidget(
+                                        options: MarkerClusterLayerOptions(
+                                          markers: markers,
+                                          builder: (context, markers) {
+                                            return _buildCluster(markers);
+                                          },
+                                          maxClusterRadius: 60,
+                                          size: const Size(48, 48),
+                                          padding: const EdgeInsets.all(50),
+                                          maxZoom: 16.0,
+                                        ),
+                                      ),
+                                      
+                                      // Add the user location marker if location is available
+                                      if (widget.mapProvider.currentPosition != null) 
+                                        UserLocationMarker(
+                                          position: LatLng(
+                                            widget.mapProvider.currentPosition!.latitude,
+                                            widget.mapProvider.currentPosition!.longitude,
+                                          ),
+                                          heading: widget.mapProvider.currentPosition!.heading,
+                                          primaryColor: Theme.of(context).primaryColor,
+                                        ),
+                                    ],
+                                  ),
                                 ),
                               ],
-                              
-                              // Markers cluster layer for pins with improved visuals
-                              MarkerClusterLayerWidget(
-                                options: MarkerClusterLayerOptions(
-                                  maxClusterRadius: 45,
-                                  size: const Size(40, 40),
-                                  padding: const EdgeInsets.all(50),
-                                  markers: markers,
-                                  builder: (context, markers) {
-                                    return _buildCluster(markers);
-                                  },
-                                  popupOptions: PopupOptions(
-                                    popupSnap: PopupSnap.markerTop,
-                                    popupController: _popupController,
-                                    popupBuilder: (_, marker) {
-                                      if (marker is CustomMarker) {
-                                        return _buildPinPopup(marker.pinData);
-                                      }
-                                      return const SizedBox.shrink();
-                                    },
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        
-                        // Add a gradient overlay to simulate lighting effect
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: Container(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Colors.white.withOpacity(_tiltAnimation.value * 0.15),
-                                    Colors.black.withOpacity(_tiltAnimation.value * 0.25),
-                                  ],
-                                  stops: const [0.0, 1.0],
-                                ),
-                              ),
                             ),
                           ),
                         ),
-                      ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            // Map controls overlay
+            Positioned(
+              bottom: 85,
+              right: 16,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Tilt control
+                  MapControlButton(
+                    icon: Icons.layers,
+                    tooltip: '3D Toggle',
+                    onPressed: _toggleTilt,
+                  ),
+                  const SizedBox(height: 8),
+                  
+                  // Zoom in
+                  MapControlButton(
+                    icon: Icons.add,
+                    tooltip: 'Zoom In',
+                    onPressed: () => _animateZoom(_mapController.camera.zoom + 1),
+                  ),
+                  const SizedBox(height: 8),
+                  
+                  // Zoom out
+                  MapControlButton(
+                    icon: Icons.remove,
+                    tooltip: 'Zoom Out',
+                    onPressed: () => _animateZoom(_mapController.camera.zoom - 1),
+                  ),
+                  const SizedBox(height: 8),
+                  
+                  // Toggle location tracking
+                  MapControlButton(
+                    icon: widget.mapProvider.isLocationTracking
+                      ? Icons.my_location
+                      : Icons.location_searching,
+                    tooltip: widget.mapProvider.isLocationTracking
+                      ? 'Tracking On'
+                      : 'Locate Me',
+                    onPressed: () {
+                      if (widget.mapProvider.currentPosition != null) {
+                        widget.mapProvider.toggleLocationTracking();
+                        animateToLocation(
+                          widget.mapProvider.currentPosition!.latitude,
+                          widget.mapProvider.currentPosition!.longitude,
+                          zoom: 16,
+                        );
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            // Loading indicator overlay
+            if (widget.mapProvider.isLoading)
+              const Center(
+                child: Card(
+                  elevation: 4,
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator(),
+                  ),
+                ),
+              ),
+              
+            // Error message overlay
+            if (widget.mapProvider.hasNetworkError)
+              Positioned(
+                bottom: 120,
+                left: 16,
+                right: 16,
+                child: Card(
+                  color: Colors.red.shade100,
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(
+                      widget.mapProvider.errorMessage,
+                      style: const TextStyle(color: Colors.red),
+                      textAlign: TextAlign.center,
                     ),
                   ),
                 ),
               ),
-            ),
-            
-            // Add a tilt indicator overlay with cleaner design
-            Positioned(
-              top: 16,
-              right: 16,
-              child: _buildTiltControls(),
-            ),
-            
-            // Add a toggle for OSM data vs decorative layers
-            Positioned(
-              top: 90, // Adjusted to avoid overlap with tilt controls
-              right: 16,
-              child: _buildDataToggle(),
-            ),
-            
-            // Add a stylish map control panel with adjusted positioning
-            Positioned(
-              bottom: 16,
-              right: 24, // Increased right padding
-              child: _buildMapControls(),
-            ),
           ],
         );
-      }
+      },
     );
   }
   
-  // Update building detail level based on the current zoom
+  // Toggle 3D tilt effect
+  void _toggleTilt() {
+    final newTiltAngle = _tiltAngle > 0.1 ? 0.0 : MapStyles.defaultTiltAngle;
+    
+    setState(() {
+      _tiltAngle = newTiltAngle;
+      _tiltAnimation = Tween<double>(
+        begin: _tiltAnimation.value,
+        end: _tiltAngle,
+      ).animate(CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeInOutCubic,
+      ));
+      
+      _animationController.reset();
+      _animationController.forward();
+    });
+  }
+
+  // Public accessor for toggle tilt
+  void toggleTilt() => _toggleTilt();
+
+  // Animate zoom level with smooth transition
+  void _animateZoom(double targetZoom) {
+    if (targetZoom < 2) targetZoom = 2;
+    if (targetZoom > 19) targetZoom = 19;
+    
+    final currentZoom = _mapController.camera.zoom;
+    final currentCenter = _mapController.camera.center;
+    
+    // Set up animation controller
+    _moveAnimationController?.dispose();
+    _moveAnimationController = AnimationController(
+      duration: MapStyles.zoomAnimationDuration,
+      vsync: this,
+    );
+    
+    // Create animation for zoom
+    _zoomAnimation = Tween<double>(
+      begin: currentZoom,
+      end: targetZoom,
+    ).animate(CurvedAnimation(
+      parent: _moveAnimationController!,
+      curve: Curves.easeInOut,
+    ));
+    
+    // Update map on animation frame
+    _moveAnimationController!.addListener(() {
+      if (_zoomAnimation != null) {
+        _mapController.move(currentCenter, _zoomAnimation!.value);
+      }
+    });
+    
+    _moveAnimationController!.forward();
+  }
+  
   void _determineDetailLevel() {
     if (_isMapInitialized) {
       final zoom = _mapController.camera.zoom;
@@ -412,10 +511,63 @@ class _FlutterMapWidgetState extends State<FlutterMapWidget> with SingleTickerPr
     }
   }
   
-  // Move map to target location
-  void moveToLocation(double latitude, double longitude, {double? zoom}) {
+  // Public method to reset the map view that can be called from outside
+  void resetMapView() {
+    setState(() {
+      _rotationAngle = MapStyles.defaultRotationAngle;
+      _toggleTilt();
+    });
+  }
+  
+  // Public method to animate to a location
+  void animateToLocation(double latitude, double longitude, {double? zoom}) {
     final targetZoom = zoom ?? AppConstants.defaultZoom;
-    _mapController.move(LatLng(latitude, longitude), targetZoom);
+    final startCenter = _mapController.camera.center;
+    final startZoom = _mapController.camera.zoom;
+    
+    // Clean up previous animation if it exists
+    _moveAnimationController?.dispose();
+    _moveAnimationController = AnimationController(
+      duration: MapStyles.cameraMoveAnimationDuration,
+      vsync: this,
+    );
+    
+    // Create animations for lat, lng, and zoom
+    _latAnimation = Tween<double>(
+      begin: startCenter.latitude,
+      end: latitude,
+    ).animate(CurvedAnimation(
+      parent: _moveAnimationController!,
+      curve: Curves.easeInOut,
+    ));
+    
+    _lngAnimation = Tween<double>(
+      begin: startCenter.longitude,
+      end: longitude,
+    ).animate(CurvedAnimation(
+      parent: _moveAnimationController!,
+      curve: Curves.easeInOut,
+    ));
+    
+    _zoomAnimation = Tween<double>(
+      begin: startZoom,
+      end: targetZoom,
+    ).animate(CurvedAnimation(
+      parent: _moveAnimationController!,
+      curve: Curves.easeInOut,
+    ));
+    
+    // Update map on animation frame
+    _moveAnimationController!.addListener(() {
+      if (_latAnimation != null && _lngAnimation != null && _zoomAnimation != null) {
+        _mapController.move(
+          LatLng(_latAnimation!.value, _lngAnimation!.value),
+          _zoomAnimation!.value,
+        );
+      }
+    });
+    
+    _moveAnimationController!.forward();
   }
   
   // Create markers from pins in the provider
@@ -479,274 +631,23 @@ class _FlutterMapWidgetState extends State<FlutterMapWidget> with SingleTickerPr
       ),
     );
   }
+}
+
+// Map control button widget
+class MapControlButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
   
-  // Build popup for a pin with improved design
-  Widget _buildPinPopup(Map<String, dynamic> pinData) {
-    return Card(
-      elevation: 8,
-      shadowColor: Colors.black.withOpacity(0.4),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Container(
-        width: 220,
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              pinData['title'] ?? 'Unknown Track',
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              pinData['artist'] ?? 'Unknown Artist',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey.shade700,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).primaryColor.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    pinData['rarity'] ?? 'Common',
-                    style: TextStyle(
-                      color: Theme.of(context).primaryColor,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                ElevatedButton(
-                  onPressed: () => widget.onPinTap(pinData),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: const Text('View Details'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  const MapControlButton({
+    Key? key,
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  }) : super(key: key);
   
-  // Build modern UI controls for tilt adjustment
-  Widget _buildTiltControls() {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.7),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.view_in_ar, color: Colors.white, size: 16),
-              const SizedBox(width: 6),
-              Text(
-                '2.5D View: ${(_tiltAngle / 0.7 * 100).toInt()}%',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          SizedBox(
-            width: 120,
-            child: SliderTheme(
-              data: SliderThemeData(
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                trackHeight: 4,
-                activeTrackColor: Theme.of(context).primaryColor,
-                inactiveTrackColor: Colors.white24,
-                thumbColor: Colors.white,
-                overlayColor: Theme.of(context).primaryColor.withOpacity(0.2),
-              ),
-              child: Slider(
-                value: _tiltAngle,
-                min: 0.0,
-                max: 0.7,
-                onChanged: (value) {
-                  setState(() {
-                    _tiltAngle = value;
-                    _tiltAnimation = Tween<double>(
-                      begin: _tiltAnimation.value,
-                      end: _tiltAngle,
-                    ).animate(CurvedAnimation(
-                      parent: _animationController,
-                      curve: Curves.easeOutCubic,
-                    ));
-                    _animationController.reset();
-                    _animationController.forward();
-                  });
-                },
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-  
-  // Build toggle for OSM data vs decorative layers
-  Widget _buildDataToggle() {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.7),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.map, color: Colors.white, size: 16),
-              const SizedBox(width: 6),
-              Text(
-                'Real OSM Data',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-          if (_useRealOSMData)
-            Padding(
-              padding: const EdgeInsets.only(top: 4.0),
-              child: Text(
-                'Note: API errors may occur',
-                style: TextStyle(
-                  color: Colors.red[300],
-                  fontSize: 10,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ),
-          const SizedBox(height: 6),
-          Switch(
-            value: _useRealOSMData,
-            activeColor: Theme.of(context).primaryColor,
-            onChanged: (value) {
-              setState(() {
-                _useRealOSMData = value;
-              });
-            },
-          ),
-        ],
-      ),
-    );
-  }
-  
-  // Build map control buttons with improved spacing
-  Widget _buildMapControls() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _buildMapControlButton(
-          icon: Icons.add,
-          onPressed: () {
-            if (_isMapInitialized) {
-              final currentZoom = _mapController.camera.zoom;
-              if (currentZoom < AppConstants.maxZoom) {
-                _mapController.move(
-                  _mapController.camera.center, 
-                  currentZoom + 1.0
-                );
-              }
-            }
-          },
-          tooltip: 'Zoom In',
-        ),
-        const SizedBox(height: 12), // Increased spacing
-        _buildMapControlButton(
-          icon: Icons.remove,
-          onPressed: () {
-            if (_isMapInitialized) {
-              final currentZoom = _mapController.camera.zoom;
-              if (currentZoom > AppConstants.minZoom) {
-                _mapController.move(
-                  _mapController.camera.center, 
-                  currentZoom - 1.0
-                );
-              }
-            }
-          },
-          tooltip: 'Zoom Out',
-        ),
-        const SizedBox(height: 24), // Extra spacing before location button
-        _buildMapControlButton(
-          icon: Icons.my_location,
-          onPressed: () {
-            moveToLocation(
-              AppConstants.defaultLatitude,
-              AppConstants.defaultLongitude,
-            );
-          },
-          tooltip: 'Reset Location',
-        ),
-        const SizedBox(height: 12), // Increased spacing
-        _buildMapControlButton(
-          icon: Icons.refresh,
-          onPressed: () {
-            setState(() {
-              _rotationAngle = 0.0;
-            });
-          },
-          tooltip: 'Reset Rotation',
-        ),
-      ],
-    );
-  }
-  
-  // Helper to build a map control button
-  Widget _buildMapControlButton({
-    required IconData icon,
-    required VoidCallback onPressed,
-    required String tooltip,
-  }) {
+  @override
+  Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         shape: BoxShape.circle,

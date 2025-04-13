@@ -1,501 +1,631 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
 import '../providers/map_provider.dart';
 import '../widgets/map/flutter_map_widget.dart';
 import '../widgets/map/leaflet_map_widget.dart';
+import '../widgets/navigation/top_navigation_bar.dart';
+import '../widgets/navigation/bottom_navigation_bar.dart';
 import '../config/constants.dart';
 
 class MapScreen extends StatefulWidget {
+  static const String routeName = '/map';
+  
   const MapScreen({Key? key}) : super(key: key);
-
+  
   @override
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMixin {
+class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   late MapProvider _mapProvider;
-  bool _useLeafletMap = true;
+  bool _useLeafletMap = false; // Default to Flutter map implementation
   bool _showZoomControls = true;
+  bool _showCompass = true;
+  int _currentNavIndex = 0; // Current bottom nav index
   
-  final TextEditingController _titleController = TextEditingController();
-  final TextEditingController _artistController = TextEditingController();
-  
-  // Animation controller for the pin drop
+  // Animation controller for pin drop effect
   late AnimationController _dropAnimationController;
   
+  // Use a GlobalKey with the correct state type
+  final GlobalKey<FlutterMapWidgetState> _mapKey = GlobalKey<FlutterMapWidgetState>();
+
   @override
   void initState() {
     super.initState();
-    _mapProvider = MapProvider();
-    _loadPins();
+    _mapProvider = Provider.of<MapProvider>(context, listen: false);
     
-    // Initialize animation controller
+    // Initialize pin drop animation controller
     _dropAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 1000),
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
     );
+    
+    // Request user location permissions
+    _requestLocationPermission();
+    
+    // Hide controls after a delay
+    _startHideControlsTimer();
   }
   
   @override
   void dispose() {
-    _titleController.dispose();
-    _artistController.dispose();
     _dropAnimationController.dispose();
     super.dispose();
   }
   
-  void _loadPins() {
-    // Load the pins from your data source
-    _mapProvider.refreshPins();
+  // Request location permission on startup
+  Future<void> _requestLocationPermission() async {
+    await _mapProvider.requestLocationPermission();
   }
   
-  void _handlePinTap(Map<String, dynamic> pinData) {
-    // Handle when a pin is tapped
-    print('Pin tapped: ${pinData['title']}');
+  // Handle UI visibility timer
+  Timer? _controlsTimer;
+  
+  void _startHideControlsTimer() {
+    _controlsTimer?.cancel();
     
-    // Show pin details in a bottom sheet
+    _controlsTimer = Timer(const Duration(seconds: 8), () {
+      if (mounted) {
+        setState(() {
+          _showZoomControls = false;
+          _showCompass = false;
+        });
+      }
+    });
+  }
+  
+  void _showControls() {
+    if (!_showZoomControls || !_showCompass) {
+      setState(() {
+        _showZoomControls = true;
+        _showCompass = true;
+      });
+      _startHideControlsTimer();
+    }
+  }
+  
+  // Handle pin tap
+  void _handlePinTap(Map<String, dynamic> pinData) {
+    // First reset controls timer to keep UI visible during interaction
+    _showControls();
+    
+    // Then show pin details
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) => _buildPinDetails(pinData),
+      builder: (context) => _buildPinDetailsSheet(pinData),
     );
   }
   
-  Widget _buildPinDetails(Map<String, dynamic> pin) {
-    final Color pinColor = _getPinColorByRarity(pin['rarity'] ?? 'Common');
+  // Show dialog to add a new pin
+  void _showAddPinDialog() {
+    // First reset controls timer
+    _showControls();
     
-    return Container(
-      margin: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.8),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: pinColor.withOpacity(0.5),
-            blurRadius: 10,
-            spreadRadius: 2,
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            height: 6,
-            width: 40,
-            margin: const EdgeInsets.only(top: 8),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade600,
-              borderRadius: BorderRadius.circular(3),
+    // Then show animation and dialog
+    _dropAnimationController.forward(from: 0.0).then((_) {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Drop Music Pin'),
+          content: const Text('Would you like to drop a music pin at your current location?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: pinColor.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        pin['rarity'] ?? 'Common',
-                        style: TextStyle(
-                          color: pinColor,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                    const Spacer(),
-                    if (pin['is_collected'] == true)
-                      const Icon(Icons.check_circle, color: Colors.green),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  pin['title'] ?? 'Untitled Track',
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  pin['artist'] ?? 'Unknown Artist',
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.grey.shade400,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                // Play button
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: pinColor,
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(double.infinity, 50),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(25),
-                    ),
-                  ),
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text('Play Track'),
-                  onPressed: () {
-                    // TODO: Implement music playback
-                    Navigator.pop(context);
-                  },
-                ),
-                
-                // Show a more button for additional actions
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: TextButton.icon(
-                    icon: const Icon(Icons.more_horiz),
-                    label: const Text('More Options'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.grey.shade400,
-                    ),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _showPinOptionsMenu(pin);
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-  
-  void _showPinOptionsMenu(Map<String, dynamic> pin) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.grey.shade900,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.share, color: Colors.white),
-              title: const Text('Share Pin', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                // TODO: Implement sharing functionality
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Share functionality coming soon!')),
-                );
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                // Add logic to actually drop a pin
               },
+              child: const Text('Drop It'),
             ),
-            ListTile(
-              leading: const Icon(Icons.directions, color: Colors.white),
-              title: const Text('Get Directions', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                // TODO: Implement directions
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Directions functionality coming soon!')),
-                );
-              },
-            ),
-            if (pin['is_collected'] != true)
-              ListTile(
-                leading: const Icon(Icons.check_circle_outline, color: Colors.white),
-                title: const Text('Mark as Collected', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.pop(context);
-                  // TODO: Implement collection marking
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Pin marked as collected!')),
-                  );
-                },
-              ),
           ],
         ),
-      ),
-    );
+      );
+    });
   }
   
-  Color _getPinColorByRarity(String rarity) {
-    switch (rarity) {
-      case 'Common':
-        return Colors.grey;
-      case 'Uncommon':
-        return Colors.green;
-      case 'Rare':
-        return Colors.blue;
-      case 'Epic':
-        return Colors.purple;
-      case 'Legendary':
-        return Colors.amber;
-      default:
-        return Colors.orange;
+  // Handle bottom navigation selection
+  void _handleNavigation(int index) {
+    setState(() {
+      _currentNavIndex = index;
+    });
+    
+    // Improved navigation logic with different actions per section
+    switch (index) {
+      case 0: // Explore - already on this screen
+        // Already on map/explore screen, reset view
+        if (_mapKey.currentState != null) {
+          _mapKey.currentState!.resetMapView();
+        }
+        break;
+      case 1: // Collection - show music collection
+        // For now just show a snackbar since we don't have the screen
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Music Collection - Coming soon!'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        break;
+      case 2: // Friends
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Friends - Coming soon!'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        break;
+      case 3: // Profile
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Profile - Coming soon!'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        break;
     }
   }
-
-  void _showAddPinDialog() {
-    // Reset the controllers
-    _titleController.clear();
-    _artistController.clear();
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.grey.shade900,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        title: const Text(
-          'Drop a Music Pin',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+  
+  // Build the bottom sheet for pin details
+  Widget _buildPinDetailsSheet(Map<String, dynamic> pinData) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 5,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              margin: const EdgeInsets.only(bottom: 16),
+            ),
+          ),
+          Text(
+            pinData['title'] ?? 'Unknown Track',
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 24,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            pinData['artist'] ?? 'Unknown Artist',
+            style: TextStyle(
+              fontSize: 18,
+              color: Colors.grey.shade700,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              TextField(
-                controller: _titleController,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Track Title',
-                  labelStyle: TextStyle(color: Colors.grey.shade400),
-                  enabledBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: Colors.grey.shade700),
-                  ),
-                  focusedBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: Theme.of(context).primaryColor),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).primaryColor.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  pinData['rarity'] ?? 'Common',
+                  style: TextStyle(
+                    color: Theme.of(context).primaryColor,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _artistController,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Artist',
-                  labelStyle: TextStyle(color: Colors.grey.shade400),
-                  enabledBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: Colors.grey.shade700),
-                  ),
-                  focusedBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: Theme.of(context).primaryColor),
-                  ),
+              Text(
+                'Dropped ${pinData['timestamp'] ?? 'recently'}',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 14,
                 ),
               ),
             ],
           ),
-        ),
-        actions: [
-          TextButton(
-            child: Text(
-              'Cancel',
-              style: TextStyle(color: Colors.grey.shade400),
-            ),
-            onPressed: () => Navigator.pop(context),
-          ),
+          const SizedBox(height: 24),
           ElevatedButton(
+            onPressed: () {
+              // Add logic to collect/play the pin
+              Navigator.of(context).pop();
+            },
             style: ElevatedButton.styleFrom(
-              backgroundColor: Theme.of(context).primaryColor,
-              foregroundColor: Colors.white,
+              minimumSize: const Size.fromHeight(50),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(12),
               ),
             ),
-            child: const Text('Drop Pin'),
-            onPressed: () {
-              _dropPin();
-              Navigator.pop(context);
-            },
+            child: const Text('Collect This Track'),
           ),
         ],
       ),
     );
   }
 
-  void _dropPin() async {
-    // Make sure we have a current position
-    if (_mapProvider.currentPosition == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Unable to get current location. Please try again.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    // Start the drop animation
-    _dropAnimationController.reset();
-    _dropAnimationController.forward();
-
-    // Generate a random rarity for the pin
-    final rarity = _mapProvider.determinePinRarity();
-
-    // Add the pin
-    final newPin = await _mapProvider.addPin(
-      latitude: _mapProvider.currentPosition!.latitude,
-      longitude: _mapProvider.currentPosition!.longitude,
-      title: _titleController.text.isNotEmpty ? _titleController.text : 'Untitled Track',
-      artist: _artistController.text.isNotEmpty ? _artistController.text : 'Unknown Artist',
-      trackUrl: 'https://example.com/tracks/sample.mp3', // Replace with real logic
-      rarity: rarity,
-    );
-
-    // Show success message
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(Icons.music_note, color: Colors.white),
-            SizedBox(width: 8),
-            Text('Dropped a $rarity music pin!'),
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    return GestureDetector(
+      onTap: _showControls,
+      onPanDown: (_) => _showControls(),
+      child: Scaffold(
+        appBar: TopNavigationBar(
+          title: 'BOP Maps',
+          onSearchTap: () {
+            // Handle search action - shows music search screen
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Music Search - Coming soon!'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+          onSettingsTap: () {
+            // Show map settings sheet
+            showModalBottomSheet(
+              context: context,
+              backgroundColor: Colors.transparent,
+              builder: (context) => _buildMapSettingsSheet(context),
+            );
+          },
+          actions: [
+            // Map type selector
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.layers),
+              onSelected: (value) {
+                setState(() {
+                  if (value == 'leaflet') {
+                    _useLeafletMap = true;
+                  } else {
+                    _useLeafletMap = false;
+                  }
+                });
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'flutter',
+                  child: Text('Flutter Map'),
+                ),
+                const PopupMenuItem(
+                  value: 'leaflet',
+                  child: Text('Leaflet JS Map'),
+                ),
+              ],
+            ),
           ],
         ),
-        backgroundColor: _getPinColorByRarity(rarity),
-        duration: const Duration(seconds: 2),
-        action: SnackBarAction(
-          label: 'VIEW',
-          textColor: Colors.white,
-          onPressed: () {
-            if (newPin != null) {
-              _handlePinTap(newPin);
-            }
-          },
+        body: _buildMapBody(),
+        bottomNavigationBar: MusicPinBottomNavBar(
+          currentIndex: _currentNavIndex,
+          onTabSelected: _handleNavigation,
+          onAddPinPressed: _showAddPinDialog,
         ),
       ),
     );
   }
   
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        title: Image.asset(
-          'assets/images/logo.png',
-          height: 40,
-          fit: BoxFit.contain,
-          errorBuilder: (context, error, stackTrace) {
-            return const Text('BOP Maps');
+  // Map body with all layers and controls
+  Widget _buildMapBody() {
+    return Stack(
+      children: [
+        // Map widget
+        _useLeafletMap
+            ? LeafletMapWidget(
+                mapProvider: _mapProvider,
+                onPinTap: _handlePinTap,
+              )
+            : FlutterMapWidget(
+                key: _mapKey,
+                mapProvider: _mapProvider,
+                onPinTap: _handlePinTap,
+              ),
+                
+        // Pin drop animation overlay
+        AnimatedBuilder(
+          animation: _dropAnimationController,
+          builder: (context, child) {
+            if (_dropAnimationController.value == 0) {
+              return const SizedBox.shrink();
+            }
+            
+            return Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: PinDropPainter(
+                    animation: _dropAnimationController,
+                    color: Theme.of(context).primaryColor,
+                  ),
+                  size: Size.infinite,
+                ),
+              ),
+            );
           },
         ),
-        backgroundColor: Colors.black.withOpacity(0.7),
-        elevation: 0,
-        actions: [
-          // Map type toggle
-          IconButton(
-            icon: Icon(_useLeafletMap ? Icons.map : Icons.public),
-            tooltip: _useLeafletMap ? "Switch to Flutter Map" : "Switch to Leaflet Map",
-            onPressed: () {
-              setState(() {
-                _useLeafletMap = !_useLeafletMap;
-              });
+        
+        // Current location button and compass with animation
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+          bottom: _showZoomControls ? 90 : -60,
+          right: 16,
+          child: _buildMapControls(),
+        ),
+        
+        // Dynamic status messages (discoveries, etc)
+        _buildStatusMessages(),
+      ],
+    );
+  }
+  
+  // Map controls (location, compass, etc)
+  Widget _buildMapControls() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FloatingActionButton.small(
+          heroTag: 'current_location',
+          backgroundColor: Colors.white,
+          foregroundColor: Theme.of(context).primaryColor,
+          child: const Icon(Icons.my_location),
+          onPressed: () {
+            // Center map on current location with animation
+            if (_mapProvider.currentPosition != null) {
+              if (!_useLeafletMap && _mapKey.currentState != null) {
+                _mapKey.currentState!.animateToLocation(
+                  _mapProvider.currentPosition!.latitude,
+                  _mapProvider.currentPosition!.longitude,
+                  zoom: 16.0,
+                );
+              } else {
+                _mapProvider.updateViewport(
+                  latitude: _mapProvider.currentPosition!.latitude,
+                  longitude: _mapProvider.currentPosition!.longitude,
+                  zoom: 16.0,
+                );
+              }
+              
+              // Turn on location tracking
+              if (!_mapProvider.isLocationTracking) {
+                _mapProvider.toggleLocationTracking();
+              }
+            }
+          },
+        ),
+        const SizedBox(height: 8),
+        FloatingActionButton.small(
+          heroTag: 'compass',
+          backgroundColor: Colors.white,
+          foregroundColor: Theme.of(context).primaryColor,
+          child: const Icon(Icons.compass_calibration),
+          onPressed: () {
+            // Reset map rotation and tilt
+            if (!_useLeafletMap && _mapKey.currentState != null) {
+              _mapKey.currentState!.resetMapView();
+            }
+          },
+        ),
+      ],
+    );
+  }
+  
+  // Status messages for errors, notifications
+  Widget _buildStatusMessages() {
+    return Consumer<MapProvider>(
+      builder: (context, mapProvider, _) {
+        if (mapProvider.hasNetworkError) {
+          return Positioned(
+            top: 16,
+            left: 16,
+            right: 16,
+            child: Card(
+              color: Colors.red.shade100,
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline, color: Colors.red),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        mapProvider.errorMessage,
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+        return const SizedBox.shrink();
+      },
+    );
+  }
+  
+  // Bottom sheet for map settings
+  Widget _buildMapSettingsSheet(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 5,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              margin: const EdgeInsets.only(bottom: 16),
+            ),
+          ),
+          Text(
+            'Map Settings',
+            style: theme.textTheme.titleLarge,
+          ),
+          const SizedBox(height: 24),
+          
+          // Map Layer toggles
+          Text(
+            'Map Style',
+            style: theme.textTheme.titleMedium,
+          ),
+          const SizedBox(height: 12),
+          _buildSettingsOption(
+            context,
+            title: 'Standard View',
+            subtitle: 'Flat map view',
+            icon: Icons.map_outlined,
+            value: !(_useLeafletMap || _mapKey.currentState?.tiltAnimation.value != 0),
+            onChanged: (value) {
+              if (value && _mapKey.currentState != null) {
+                setState(() {
+                  _useLeafletMap = false;
+                });
+                _mapKey.currentState!.resetMapView();
+              }
+              Navigator.pop(context);
             },
           ),
-          // Show/hide zoom controls
-          IconButton(
-            icon: Icon(_showZoomControls ? Icons.zoom_in_map : Icons.zoom_out_map),
-            tooltip: _showZoomControls ? "Hide Zoom Controls" : "Show Zoom Controls",
-            onPressed: () {
+          const Divider(),
+          _buildSettingsOption(
+            context,
+            title: '2.5D View',
+            subtitle: 'Perspective with buildings',
+            icon: Icons.view_in_ar_outlined,
+            value: !_useLeafletMap && _mapKey.currentState?.tiltAnimation.value != 0,
+            onChanged: (value) {
+              if (value && _mapKey.currentState != null) {
+                setState(() {
+                  _useLeafletMap = false;
+                });
+                if (_mapKey.currentState!.tiltAnimation.value == 0) {
+                  _mapKey.currentState!.toggleTilt();
+                }
+              }
+              Navigator.pop(context);
+            },
+          ),
+          const Divider(),
+          _buildSettingsOption(
+            context,
+            title: 'Leaflet Map',
+            subtitle: 'Alternative map engine',
+            icon: Icons.public,
+            value: _useLeafletMap,
+            onChanged: (value) {
               setState(() {
-                _showZoomControls = !_showZoomControls;
+                _useLeafletMap = value;
               });
+              Navigator.pop(context);
+            },
+          ),
+          
+          // Other settings as needed
+          const SizedBox(height: 24),
+          Text(
+            'Display Options',
+            style: theme.textTheme.titleMedium,
+          ),
+          const SizedBox(height: 12),
+          SwitchListTile(
+            title: const Text('Show Buildings'),
+            subtitle: const Text('3D buildings on the map'),
+            value: true, // TODO: Connect to actual settings
+            onChanged: (value) {
+              // TODO: Implement building toggle
+            },
+          ),
+          SwitchListTile(
+            title: const Text('Music Pin Clustering'),
+            subtitle: const Text('Group nearby pins on the map'),
+            value: true, // TODO: Connect to actual settings
+            onChanged: (value) {
+              // TODO: Implement clustering toggle
             },
           ),
         ],
       ),
-      body: Stack(
-        children: [
-          // Map widget
-          _useLeafletMap
-              ? LeafletMapWidget(
-                  mapProvider: _mapProvider,
-                  onPinTap: _handlePinTap,
-                )
-              : FlutterMapWidget(
-                  mapProvider: _mapProvider,
-                  onPinTap: _handlePinTap,
-                ),
-                
-          // Pin drop animation overlay
-          AnimatedBuilder(
-            animation: _dropAnimationController,
-            builder: (context, child) {
-              if (_dropAnimationController.value == 0) {
-                return const SizedBox.shrink();
-              }
-              
-              return Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: IgnorePointer(
-                  child: CustomPaint(
-                    painter: PinDropPainter(
-                      animation: _dropAnimationController,
-                      color: Theme.of(context).primaryColor,
-                    ),
-                    size: Size.infinite,
-                  ),
-                ),
-              );
-            },
-          ),
-          
-          // Current location button and compass
-          if (_showZoomControls)
-            Positioned(
-              bottom: 90,
-              right: 16,
+    );
+  }
+  
+  // Helper to build settings options
+  Widget _buildSettingsOption(
+    BuildContext context, {
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    final theme = Theme.of(context);
+    
+    return InkWell(
+      onTap: () => onChanged(true),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8.0),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              color: value ? theme.colorScheme.primary : theme.colorScheme.onSurface.withOpacity(0.6),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  FloatingActionButton.small(
-                    heroTag: 'current_location',
-                    backgroundColor: Colors.white,
-                    foregroundColor: Theme.of(context).primaryColor,
-                    child: const Icon(Icons.my_location),
-                    onPressed: () {
-                      // Center map on current location
-                      if (_mapProvider.currentPosition != null) {
-                        _mapProvider.updateViewport(
-                          latitude: _mapProvider.currentPosition!.latitude,
-                          longitude: _mapProvider.currentPosition!.longitude,
-                          zoom: AppConstants.defaultZoom,
-                        );
-                      }
-                    },
+                  Text(
+                    title,
+                    style: theme.textTheme.subtitle1?.copyWith(
+                      fontWeight: value ? FontWeight.bold : FontWeight.normal,
+                      color: value ? theme.colorScheme.primary : null,
+                    ),
                   ),
-                  const SizedBox(height: 8),
-                  FloatingActionButton.small(
-                    heroTag: 'compass',
-                    backgroundColor: Colors.white,
-                    foregroundColor: Theme.of(context).primaryColor,
-                    child: const Icon(Icons.compass_calibration),
-                    onPressed: () {
-                      // Reset map rotation and tilt
-                    },
+                  Text(
+                    subtitle,
+                    style: theme.textTheme.caption,
                   ),
                 ],
               ),
             ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddPinDialog,
-        backgroundColor: Theme.of(context).primaryColor,
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.add_location_alt),
-        label: const Text('Drop Music Pin'),
+            Radio<bool>(
+              value: true,
+              groupValue: value,
+              onChanged: (newValue) {
+                if (newValue != null) {
+                  onChanged(newValue);
+                }
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -506,39 +636,68 @@ class PinDropPainter extends CustomPainter {
   final Animation<double> animation;
   final Color color;
   
-  PinDropPainter({required this.animation, required this.color});
+  PinDropPainter({
+    required this.animation,
+    required this.color,
+  });
   
   @override
   void paint(Canvas canvas, Size size) {
-    // Only show animation for first half of the animation
-    if (animation.value > 0.5) return;
-    
-    // Adjusted animation value to make it look good in the first half
-    final animValue = animation.value * 2;
-    
-    // Draw a ripple effect
-    final paint = Paint()
-      ..color = color.withOpacity(0.3 * (1 - animValue))
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0;
-    
+    // Calculate center of screen
     final center = Offset(size.width / 2, size.height / 2);
-    final maxRadius = size.width * 0.3;
-    final radius = maxRadius * animValue;
     
-    canvas.drawCircle(center, radius, paint);
+    // Draw ripple effect
+    final ripplePaint = Paint()
+      ..color = color.withOpacity(0.3 * (1 - animation.value))
+      ..style = PaintingStyle.fill;
+      
+    canvas.drawCircle(
+      center,
+      50 + (animation.value * 100),
+      ripplePaint,
+    );
     
-    // Draw a second outer ripple
-    final paint2 = Paint()
-      ..color = color.withOpacity(0.2 * (1 - animValue))
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+    // Draw pin that drops from top
+    final pinY = size.height * 0.3 * (1 - animation.value);
     
-    canvas.drawCircle(center, radius * 1.3, paint2);
+    // Pin head
+    final pinHeadPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+      
+    canvas.drawCircle(
+      Offset(center.dx, center.dy - 15 + pinY),
+      15,
+      pinHeadPaint,
+    );
+    
+    // Pin shadow
+    final shadowPaint = Paint()
+      ..color = Colors.black.withOpacity(0.2 * animation.value)
+      ..style = PaintingStyle.fill
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+      
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(center.dx, center.dy + 30),
+        width: 20 * animation.value,
+        height: 10 * animation.value,
+      ),
+      shadowPaint,
+    );
+    
+    // Pin tail
+    final pinPath = Path()
+      ..moveTo(center.dx, center.dy - 15 + pinY)
+      ..lineTo(center.dx - 10, center.dy + pinY)
+      ..lineTo(center.dx + 10, center.dy + pinY)
+      ..close();
+      
+    canvas.drawPath(pinPath, pinHeadPaint);
   }
   
   @override
   bool shouldRepaint(covariant PinDropPainter oldDelegate) {
-    return animation != oldDelegate.animation || color != oldDelegate.color;
+    return oldDelegate.animation.value != animation.value;
   }
 } 

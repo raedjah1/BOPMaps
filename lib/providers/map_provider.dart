@@ -73,9 +73,13 @@ class MapProvider with ChangeNotifier {
       _isMapLoading = false;
       notifyListeners();
       
-      // Start position updates
+      // Start position updates with heading information
       _isLocationTracking = true;
-      _positionStream = _locationService.getPositionStream().listen(
+      _positionStream = _locationService.getPositionStream(
+        locationSettings: const LocationSettings(
+          distanceFilter: 5, // Update when moved 5 meters
+        ),
+      ).listen(
         (Position position) {
           _currentPosition = position;
           
@@ -99,6 +103,35 @@ class MapProvider with ChangeNotifier {
       _isLocationTracking = false;
       _setError('Error getting location: $e');
       notifyListeners();
+    }
+  }
+  
+  // Request location permission
+  Future<LocationPermission> requestLocationPermission() async {
+    try {
+      final permission = await _locationService.requestPermission();
+      
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        _setError('Location permission denied');
+      } else {
+        // Clear error if permission was granted
+        _clearError();
+        
+        // Get initial position if we don't have one yet
+        if (_currentPosition == null) {
+          final position = await _locationService.getCurrentPosition();
+          _currentPosition = position;
+          _currentCenter = LatLng(position.latitude, position.longitude);
+          notifyListeners();
+        }
+      }
+      
+      return permission;
+    } catch (e) {
+      debugPrint('Error requesting location permission: $e');
+      _setError('Error requesting location: $e');
+      return LocationPermission.denied;
     }
   }
   
@@ -298,6 +331,15 @@ class MapProvider with ChangeNotifier {
     } else {
       return 'Legendary';
     }
+  }
+  
+  // Helper to clear error state
+  void _clearError() {
+    _hasNetworkError = false;
+    _errorMessage = '';
+    _isMapLoading = false;
+    _isPinsLoading = false;
+    notifyListeners();
   }
   
   @override

@@ -41,43 +41,38 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     final authProvider = Provider.of<AuthProvider>(context);
     final user = authProvider.currentUser;
     final theme = Theme.of(context);
+    final size = MediaQuery.of(context).size;
     
     return Scaffold(
       body: CustomScrollView(
         controller: _scrollController,
         slivers: [
-          // Custom Sliver App Bar
           SliverAppBar(
-            expandedHeight: 280.0,
+            expandedHeight: size.height * 0.4, // 40% of screen height
             floating: false,
             pinned: true,
             stretch: true,
             backgroundColor: theme.colorScheme.surface,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.pop(context),
+            ),
             flexibleSpace: FlexibleSpaceBar(
-              background: _buildProfileHeader(context, user),
+              background: SafeArea(
+                bottom: false,
+                child: _buildProfileHeader(context, user, size),
+              ),
               stretchModes: const [
                 StretchMode.zoomBackground,
                 StretchMode.blurBackground,
               ],
             ),
-            leading: IconButton(
-              icon: const Icon(Icons.settings),
-              onPressed: () => Navigator.pushNamed(context, '/settings'),
-            ),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.person),
-                onPressed: () => Navigator.pushNamed(context, '/profile'),
-              ),
-            ],
           ),
 
-          // Stats Section
           SliverToBoxAdapter(
-            child: _buildStatsSection(context),
+            child: _buildStatsSection(context, size),
           ),
 
-          // Tab Bar
           SliverPersistentHeader(
             delegate: _SliverAppBarDelegate(
               TabBar(
@@ -85,6 +80,12 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 labelColor: AppTheme.primaryColor,
                 unselectedLabelColor: theme.colorScheme.onSurface.withOpacity(0.6),
                 indicatorColor: AppTheme.primaryColor,
+                indicatorWeight: 3,
+                indicatorSize: TabBarIndicatorSize.label,
+                labelStyle: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
                 tabs: const [
                   Tab(text: 'My Pins'),
                   Tab(text: 'Activity'),
@@ -95,7 +96,6 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
             pinned: true,
           ),
 
-          // Tab Content
           SliverFillRemaining(
             child: TabBarView(
               controller: _tabController,
@@ -111,147 +111,221 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildProfileHeader(BuildContext context, dynamic user) {
+  Widget _buildProfileHeader(BuildContext context, dynamic user, Size size) {
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
           colors: [
             AppTheme.primaryColor,
             AppTheme.primaryColor.withOpacity(0.8),
             AppTheme.secondaryColor,
           ],
+          stops: const [0.0, 0.5, 1.0],
         ),
       ),
-      child: SafeArea(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const SizedBox(height: 20),
-            // Profile Picture with Aura Effect
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                // Aura Effect
-                Container(
-                  width: 120,
-                  height: 120,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppTheme.auraColor.withOpacity(0.3),
-                        blurRadius: 20,
-                        spreadRadius: 5,
-                      ),
-                    ],
-                  ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(height: size.height * 0.02),
+          // Profile Picture with Aura Effect
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              // Enhanced Aura Effect
+              Container(
+                width: size.width * 0.35,
+                height: size.width * 0.35,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.auraColor.withOpacity(0.4),
+                      blurRadius: 30,
+                      spreadRadius: 10,
+                    ),
+                    BoxShadow(
+                      color: AppTheme.auraColor.withOpacity(0.2),
+                      blurRadius: 20,
+                      spreadRadius: 5,
+                    ),
+                  ],
                 ),
-                // Profile Picture
-                Container(
-                  width: 100,
-                  height: 100,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
+              ),
+              // Profile Picture
+              Container(
+                width: size.width * 0.3,
+                height: size.width * 0.3,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white,
+                    width: 4,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 15,
+                      spreadRadius: 3,
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(size.width * 0.15),
+                  child: CachedNetworkImage(
+                    imageUrl: user?.photoURL ?? 'assets/images/default_profile.png',
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) => const CircularProgressIndicator(
                       color: Colors.white,
-                      width: 3,
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
-                        blurRadius: 10,
-                        spreadRadius: 2,
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(50),
-                    child: CachedNetworkImage(
-                      imageUrl: user?.photoURL ?? 'https://via.placeholder.com/100',
-                      fit: BoxFit.cover,
-                      placeholder: (context, url) => const CircularProgressIndicator(),
-                      errorWidget: (context, url, error) => const Icon(Icons.person, size: 50),
+                    errorWidget: (context, url, error) => const Icon(
+                      Icons.person,
+                      size: 50,
+                      color: Colors.white,
                     ),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            // Username
-            Text(
-              user?.displayName ?? 'Anonymous User',
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
               ),
-            ),
-            const SizedBox(height: 8),
-            // User Bio
-            Text(
-              user?.bio ?? 'Music explorer and pin collector',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.white.withOpacity(0.8),
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            // Edit Profile Button
-            ElevatedButton(
+            ],
+          ),
+          SizedBox(height: size.height * 0.02),
+          // Username with Animation
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.0, end: 1.0),
+            duration: const Duration(milliseconds: 500),
+            builder: (context, value, child) {
+              return Transform.scale(
+                scale: value,
+                child: Text(
+                  user?.displayName ?? 'Anonymous User',
+                  style: TextStyle(
+                    fontSize: size.width * 0.07,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    letterSpacing: 0.5,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              );
+            },
+          ),
+          SizedBox(height: size.height * 0.01),
+          // User Bio with Fade Animation
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.0, end: 1.0),
+            duration: const Duration(milliseconds: 800),
+            builder: (context, value, child) {
+              return Opacity(
+                opacity: value,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: size.width * 0.1),
+                  child: Text(
+                    user?.bio ?? 'Music explorer and pin collector',
+                    style: TextStyle(
+                      fontSize: size.width * 0.04,
+                      color: Colors.white.withOpacity(0.9),
+                      height: 1.4,
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              );
+            },
+          ),
+          SizedBox(height: size.height * 0.02),
+          // Modern Edit Profile Button
+          Padding(
+            padding: EdgeInsets.only(bottom: size.height * 0.02),
+            child: ElevatedButton(
               onPressed: () {
                 // TODO: Implement edit profile
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: AppTheme.primaryColor,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
+                padding: EdgeInsets.symmetric(
+                  horizontal: size.width * 0.08,
+                  vertical: size.height * 0.015,
                 ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(25),
+                ),
+                elevation: 2,
+                shadowColor: Colors.black.withOpacity(0.2),
               ),
-              child: const Text('Edit Profile'),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.edit, size: size.width * 0.045),
+                  SizedBox(width: size.width * 0.02),
+                  Text(
+                    'Edit Profile',
+                    style: TextStyle(
+                      fontSize: size.width * 0.04,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatsSection(BuildContext context, Size size) {
+    return Container(
+      margin: EdgeInsets.all(size.width * 0.04),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(size.width * 0.04),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildStatItem('Pins', '128', size),
+            _buildStatItem('Collections', '12', size),
+            _buildStatItem('Following', '256', size),
+            _buildStatItem('Followers', '512', size),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildStatsSection(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _buildStatItem('Pins', '128'),
-          _buildStatItem('Collections', '12'),
-          _buildStatItem('Following', '256'),
-          _buildStatItem('Followers', '512'),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatItem(String label, String value) {
+  Widget _buildStatItem(String label, String value, Size size) {
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           value,
           style: TextStyle(
-            fontSize: 20,
+            fontSize: size.width * 0.06,
             fontWeight: FontWeight.bold,
             color: AppTheme.primaryColor,
           ),
         ),
-        const SizedBox(height: 4),
+        SizedBox(height: size.height * 0.005),
         Text(
           label,
           style: TextStyle(
-            fontSize: 14,
-            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+            fontSize: size.width * 0.035,
+            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
           ),
         ),
       ],
@@ -277,8 +351,10 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 child: AspectRatio(
                   aspectRatio: 16 / 9,
                   child: CachedNetworkImage(
-                    imageUrl: 'https://via.placeholder.com/400x225',
+                    imageUrl: 'assets/images/default_pin.png',
                     fit: BoxFit.cover,
+                    placeholder: (context, url) => const CircularProgressIndicator(),
+                    errorWidget: (context, url, error) => const Icon(Icons.location_on, size: 50),
                   ),
                 ),
               ),
@@ -394,8 +470,10 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 child: AspectRatio(
                   aspectRatio: 1,
                   child: CachedNetworkImage(
-                    imageUrl: 'https://via.placeholder.com/200',
+                    imageUrl: 'assets/images/default_collection.png',
                     fit: BoxFit.cover,
+                    placeholder: (context, url) => const CircularProgressIndicator(),
+                    errorWidget: (context, url, error) => const Icon(Icons.collections, size: 50),
                   ),
                 ),
               ),

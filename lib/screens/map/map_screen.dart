@@ -29,6 +29,10 @@ class _MapScreenState extends State<MapScreen> {
   // Controller for the bottom sheet
   final PersistentBottomSheetController? _bottomSheetController = null;
   
+  // State variables for map controls
+  bool _showZoomControls = true;
+  bool _useLeafletMap = false;
+  
   @override
   void initState() {
     super.initState();
@@ -45,15 +49,49 @@ class _MapScreenState extends State<MapScreen> {
       builder: (context, mapProvider, authProvider, child) {
         return Scaffold(
           appBar: AppBar(
-            backgroundColor: Colors.transparent,
+            title: Image.asset(
+              'assets/images/logo.png',
+              height: 40,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) {
+                return const Text('BOP Maps');
+              },
+            ),
+            backgroundColor: Colors.black.withOpacity(0.7),
             elevation: 0,
-            title: const Text("BOPMaps", style: TextStyle(fontWeight: FontWeight.bold)),
+            leading: IconButton(
+              icon: const Icon(Icons.settings),
+              tooltip: 'Settings',
+              onPressed: () {
+                Navigator.pushNamed(context, '/settings');
+              },
+            ),
             actions: [
               IconButton(
-                icon: const Icon(Icons.settings),
-                tooltip: 'Settings',
+                icon: const Icon(Icons.person),
+                tooltip: 'Profile',
                 onPressed: () {
-                  Navigator.pushNamed(context, '/settings');
+                  Navigator.pushNamed(context, '/profile');
+                },
+              ),
+              // Map type toggle
+              IconButton(
+                icon: Icon(_useLeafletMap ? Icons.map : Icons.public),
+                tooltip: _useLeafletMap ? "Switch to Flutter Map" : "Switch to Leaflet Map",
+                onPressed: () {
+                  setState(() {
+                    _useLeafletMap = !_useLeafletMap;
+                  });
+                },
+              ),
+              // Show/hide zoom controls
+              IconButton(
+                icon: Icon(_showZoomControls ? Icons.zoom_in_map : Icons.zoom_out_map),
+                tooltip: _showZoomControls ? "Hide Zoom Controls" : "Show Zoom Controls",
+                onPressed: () {
+                  setState(() {
+                    _showZoomControls = !_showZoomControls;
+                  });
                 },
               ),
             ],
@@ -124,12 +162,19 @@ class _MapScreenState extends State<MapScreen> {
               // Already on map screen
             },
           ),
-          const SizedBox(width: 48), // Space for FAB
           IconButton(
             icon: const Icon(Icons.library_music),
             tooltip: 'Library',
             onPressed: () {
               Navigator.pushNamed(context, '/library');
+            },
+          ),
+          const SizedBox(width: 48), // Space for FAB
+          IconButton(
+            icon: const Icon(Icons.person),
+            tooltip: 'Profile',
+            onPressed: () {
+              Navigator.pushNamed(context, '/profile');
             },
           ),
         ],

@@ -16,7 +16,6 @@ import '../../widgets/common/empty_state_widget.dart';
 import '../../widgets/bottomsheets/create_pin_bottomsheet.dart';
 import '../../widgets/animations/fade_in_animation.dart';
 import '../../widgets/map/flutter_map_widget.dart';
-import '../../widgets/map/map_controls_widget.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({Key? key}) : super(key: key);
@@ -64,13 +63,6 @@ class _MapScreenState extends State<MapScreen> {
               FlutterMapWidget(
                 mapProvider: mapProvider,
                 onPinTap: _showPinDetails,
-              ),
-              
-              // Map controls (zoom, location button, etc)
-              MapControlsWidget(
-                onLocationButtonTap: () async {
-                  // Will be implemented in the MapControlsWidget
-                },
               ),
               
               // Loading indicator 

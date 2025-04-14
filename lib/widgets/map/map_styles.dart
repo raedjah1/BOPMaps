@@ -6,8 +6,20 @@ class MapStyles {
   static const Color primaryColor = Color(0xFF1976D2);  // Change to match your theme
   static const Color backgroundColor = Color(0xFF121212);
   
-  // Improved water color with richer blue tone
-  static const Color waterColor = Color(0xFF182834);
+  // Enhanced water colors with rich oceanic palette
+  static const Color waterColor = Color(0xFF182834);      // Base water color
+  static const Color oceanDeepColor = Color(0xFF0A3D62);  // Deep ocean (zoomed out)
+  static const Color oceanShallowColor = Color(0xFF1E5D8C); // Shallow ocean
+  static const Color riverColor = Color(0xFF2E86C1);      // Rivers
+  static const Color lakeColor = Color(0xFF21618C);       // Lakes
+  
+  // Sea gradients for texture effects
+  static const List<Color> oceanGradient = [
+    Color(0xFF0A3D62),  // Deep blue
+    Color(0xFF1A5276),  // Mid-deep blue
+    Color(0xFF2874A6),  // Medium blue
+    Color(0xFF3498DB),  // Lighter blue (shallow)
+  ];
   
   // Improved land color with subtle warmth
   static const Color landColor = Color(0xFF202124);
@@ -73,6 +85,17 @@ class MapStyles {
           "id": "background",
           "type": "background",
           "paint": {"background-color": "${_colorToHex(backgroundColor)}"}
+        },
+        {
+          "id": "ocean",
+          "type": "fill",
+          "source": "openmaptiles",
+          "source-layer": "water",
+          "filter": ["==", "class", "ocean"],
+          "paint": {
+            "fill-color": "${_colorToHex(oceanDeepColor)}",
+            "fill-opacity": 0.95
+          }
         },
         {
           "id": "water",
@@ -183,9 +206,21 @@ class MapStyles {
       stroke-opacity: 0.6;
     }
     
-    /* Add subtle water styling */
+    /* Enhanced water styling */
     .water {
       fill: ${_colorToHex(waterColor)};
+      opacity: 0.9;
+    }
+    .ocean {
+      fill: ${_colorToHex(oceanDeepColor)};
+      opacity: 0.95;
+    }
+    .river {
+      fill: ${_colorToHex(riverColor)};
+      opacity: 0.85;
+    }
+    .lake {
+      fill: ${_colorToHex(lakeColor)};
       opacity: 0.9;
     }
     

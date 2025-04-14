@@ -5,6 +5,10 @@ import 'dart:math' as math;
 import 'dart:ui'; // Explicitly import dart:ui for Path
 
 import 'osm_data_processor.dart';
+import '../../../services/map_cache_manager.dart';
+import '../map_caching/map_cache_extension.dart';
+import '../map_caching/zoom_level_manager.dart';
+import '../map_caching/map_cache_coordinator.dart';
 
 // Extension to add normalize method to Offset
 extension OffsetExtensions on Offset {
@@ -38,6 +42,9 @@ class OSMBuildingsLayer extends StatefulWidget {
 
 class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
   final OSMDataProcessor _dataProcessor = OSMDataProcessor();
+  final MapCacheManager _cacheManager = MapCacheManager();
+  final ZoomLevelManager _zoomManager = ZoomLevelManager();
+  
   List<Map<String, dynamic>> _buildings = [];
   bool _isLoading = true;
   bool _needsRefresh = true;
@@ -48,6 +55,15 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
   LatLngBounds? _lastFetchedBounds;
   double _lastFetchedZoom = 0;
   bool _didInitialFetch = false;
+  
+  // Track current zoom level bucket for optimized rendering
+  int _currentZoomBucket = 3;
+  
+  // Keep track of the last request time for rate limiting
+  DateTime _lastRequestTime = DateTime.now().subtract(const Duration(seconds: 30));
+  
+  // Network error state
+  bool _hasNetworkError = false;
   
   // Building color palettes for different themes
   final Map<String, Map<String, Map<String, Color>>> _buildingColorPalette = {
@@ -200,32 +216,82 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
   void initState() {
     super.initState();
     _currentTheme = widget.theme;
+    _currentZoomBucket = _getZoomBucket(widget.zoomLevel);
     _fetchBuildings();
+  }
+  
+  // Add a method to reset network errors and retry
+  void retryAfterNetworkError() {
+    if (_hasNetworkError) {
+      setState(() {
+        _hasNetworkError = false;
+        _isLoading = true;
+      });
+      
+      // Reset the error state in the data processor
+      _dataProcessor.resetErrorState();
+      
+      // Try fetching again
+      _fetchBuildings();
+    }
+  }
+  
+  // Get the zoom bucket (1-5) for current zoom level
+  int _getZoomBucket(double zoom) {
+    if (zoom < 8) return 1;
+    if (zoom < 11) return 2;
+    if (zoom < 14) return 3;
+    if (zoom < 17) return 4;
+    return 5;
   }
   
   @override
   void didUpdateWidget(OSMBuildingsLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     
-    // Update theme if it changed
-    if (widget.theme != _currentTheme) {
-      setState(() {
-        _currentTheme = widget.theme;
-      });
+    // Update current theme if changed
+    if (widget.theme != oldWidget.theme) {
+      _currentTheme = widget.theme;
     }
     
-    // Skip updates if map is moving for better performance
-    if (widget.isMapMoving && _buildings.isNotEmpty) {
-      return;
+    // Update zoom bucket if needed
+    final newZoomBucket = _getZoomBucket(widget.zoomLevel);
+    if (newZoomBucket != _currentZoomBucket) {
+      _currentZoomBucket = newZoomBucket;
+      _needsRefresh = true;
     }
     
-    // Check if we need to update data - significant bounds/zoom change
-    final boundsChanged = _lastFetchedBounds == null || 
-        !_areBoundsSimilar(_lastFetchedBounds!, widget.visibleBounds);
-    final zoomChanged = (_lastFetchedZoom - widget.zoomLevel).abs() >= 1.0;
+    // Check if bounds have changed significantly
+    bool boundsChanged = false;
+    if (widget.visibleBounds != oldWidget.visibleBounds) {
+      final newBoundsKey = _getBoundsKey();
+      boundsChanged = newBoundsKey != _lastBoundsKey;
+    }
     
-    if (boundsChanged || zoomChanged) {
+    // Track if map has stopped moving
+    final wasMoving = oldWidget.isMapMoving;
+    final isMovingNow = widget.isMapMoving;
+    final stoppedMoving = wasMoving && !isMovingNow;
+    
+    // Fetch new data if:
+    // 1. Bounds changed significantly and we're not moving, or
+    // 2. Map was moving and has now stopped and we've marked for refresh, or
+    // 3. Zoom bucket changed
+    if ((boundsChanged && !isMovingNow) || 
+        (stoppedMoving && _needsRefresh) || 
+        (newZoomBucket != _currentZoomBucket)) {
+      
+      // Schedule fetch after a short delay if we just stopped moving
+      // This prevents too many fetches during fast interactions
+      if (stoppedMoving) {
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted && _needsRefresh) {
       _fetchBuildings();
+    }
+        });
+      } else {
+        _fetchBuildings();
+      }
     }
   }
   
@@ -235,9 +301,7 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
     final ne = widget.visibleBounds.northEast;
     
     // Reduce precision for bounds (3 decimal places ≈ 100m accuracy)
-    final key = '${sw.latitude.toStringAsFixed(3)},${sw.longitude.toStringAsFixed(3)}_'
-               '${ne.latitude.toStringAsFixed(3)},${ne.longitude.toStringAsFixed(3)}_'
-               '${widget.zoomLevel.toStringAsFixed(1)}';
+    final key = 'bounds_${sw.latitude.toStringAsFixed(4)}_${sw.longitude.toStringAsFixed(4)}_${ne.latitude.toStringAsFixed(4)}_${ne.longitude.toStringAsFixed(4)}_${widget.zoomLevel.toStringAsFixed(1)}';
     return key;
   }
   
@@ -267,7 +331,14 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
   
   // Delay fetch to prevent excessive API calls during continuous panning/zooming
   void _delayedFetch() {
-    Future.delayed(const Duration(milliseconds: 300), () {
+    // Adaptive delay based on zoom level - longer delay for higher zoom levels
+    // as they require more detailed data and processing
+    int delay = 300; // Base delay in milliseconds
+    if (_currentZoomBucket >= 4) {
+      delay = 500; // Longer delay for high zoom levels
+    }
+    
+    Future.delayed(Duration(milliseconds: delay), () {
       if (mounted && _needsRefresh) {
         _fetchBuildings();
       }
@@ -275,28 +346,179 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
   }
   
   void _fetchBuildings() async {
+    // Skip if we're at global view level where buildings aren't needed
+    if (_currentZoomBucket <= 2 && widget.zoomLevel < 10) {
     setState(() {
-      _isLoading = true;
+        _buildings = [];
+        _isLoading = false;
+        _needsRefresh = false;
+        _didInitialFetch = true;
+        _hasNetworkError = false;
+      });
+      return;
+    }
+    
+    setState(() {
+      _isLoading = !_didInitialFetch; // Only show loading on first fetch
     });
     
     // Update bounds key
     _lastBoundsKey = _getBoundsKey();
     
-    // Use the map bounds to fetch buildings
-    final southwest = widget.visibleBounds.southWest;
-    final northeast = widget.visibleBounds.northEast;
+    // Check if bounds or zoom has significantly changed
+    bool shouldSkipFetch = false;
+    if (_lastFetchedBounds != null && _lastFetchedZoom > 0) {
+      final boundsDistance = _calculateBoundsDistance(widget.visibleBounds, _lastFetchedBounds!);
+      final zoomDifference = (widget.zoomLevel - _lastFetchedZoom).abs();
+      
+      // If we're moving the map and have cached data, delay the fetch
+      if (widget.isMapMoving && _buildings.isNotEmpty) {
+        shouldSkipFetch = true;
+      }
+      // If bounds haven't changed much and zoom level is similar, use cached data
+      else if (boundsDistance < 0.05 && zoomDifference < 1.0 && _buildings.isNotEmpty) {
+        shouldSkipFetch = true;
+      }
+    }
     
-    final buildings = await _dataProcessor.fetchBuildingData(southwest, northeast);
+    if (shouldSkipFetch) {
+      setState(() {
+        _isLoading = false;
+        _needsRefresh = true; // Mark for refresh when map movement stops
+      });
+      return;
+    }
+    
+    // Generate cache key for the MapCacheCoordinator
+    final cacheKey = 'buildings_${widget.visibleBounds.southWest.latitude.toStringAsFixed(4)}_${widget.visibleBounds.southWest.longitude.toStringAsFixed(4)}_${widget.visibleBounds.northEast.latitude.toStringAsFixed(4)}_${widget.visibleBounds.northEast.longitude.toStringAsFixed(4)}_${_currentZoomBucket}';
+    
+    try {
+      // Use MapCacheCoordinator to get data from cache or fetch from network
+      final buildingsData = await MapCacheCoordinator().getData(
+        type: MapDataType.buildings,
+        key: cacheKey,
+        southwest: widget.visibleBounds.southWest,
+        northeast: widget.visibleBounds.northEast,
+        zoomLevel: widget.zoomLevel,
+        fetchIfMissing: () async {
+          // Adapt detail level based on zoom bucket
+          final detailLevel = _getDetailLevel(_currentZoomBucket);
+          
+          // Calculate a safe data request region based on Overpass API limits
+          final safeRequestBounds = _calculateSafeRequestBounds(
+            widget.visibleBounds,
+            detailLevel,
+            widget.zoomLevel
+          );
+          
+          // Fetch building data with appropriate detail level
+          return await _dataProcessor.fetchBuildingData(
+            safeRequestBounds.southWest,
+            safeRequestBounds.northEast,
+            detailLevel: detailLevel
+          );
+        }
+      );
     
     if (mounted) {
       setState(() {
-        _buildings = buildings;
+          _buildings = buildingsData ?? [];
         _isLoading = false;
-        _needsRefresh = false;
-        _lastFetchedBounds = widget.visibleBounds;
-        _lastFetchedZoom = widget.zoomLevel;
-        _didInitialFetch = true;
-      });
+          _needsRefresh = false;
+          _lastFetchedBounds = widget.visibleBounds;
+          _lastFetchedZoom = widget.zoomLevel;
+          _didInitialFetch = true;
+          _hasNetworkError = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error in OSMBuildingsLayer: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _hasNetworkError = true;
+          // Keep existing buildings if we have them
+          _didInitialFetch = true;
+        });
+      }
+    }
+  }
+  
+  // Calculate a distance metric between two bounds
+  double _calculateBoundsDistance(LatLngBounds bounds1, LatLngBounds bounds2) {
+    // Simple Euclidean distance between centers
+    final center1 = LatLng(
+      (bounds1.northEast.latitude + bounds1.southWest.latitude) / 2,
+      (bounds1.northEast.longitude + bounds1.southWest.longitude) / 2
+    );
+    
+    final center2 = LatLng(
+      (bounds2.northEast.latitude + bounds2.southWest.latitude) / 2,
+      (bounds2.northEast.longitude + bounds2.southWest.longitude) / 2
+    );
+    
+    // Approximate using flat-earth model for small distances
+    return math.sqrt(
+      math.pow(center1.latitude - center2.latitude, 2) +
+      math.pow(center1.longitude - center2.longitude, 2)
+    );
+  }
+  
+  // Calculate a safe request bounds that won't exceed Overpass API limits
+  LatLngBounds _calculateSafeRequestBounds(LatLngBounds visibleBounds, double detailLevel, double zoomLevel) {
+    final double latDelta = visibleBounds.northEast.latitude - visibleBounds.southWest.latitude;
+    final double lonDelta = visibleBounds.northEast.longitude - visibleBounds.southWest.longitude;
+    
+    // Calculate center of visible bounds
+    final LatLng center = LatLng(
+      visibleBounds.southWest.latitude + latDelta * 0.5,
+      visibleBounds.southWest.longitude + lonDelta * 0.5
+    );
+    
+    // Adjust maximum query area based on zoom level
+    // Higher zoom levels can query smaller areas with higher detail
+    double maxAreaSize = 0.04; // Default max area (~ 4km)
+    
+    if (zoomLevel < 12) {
+      // At low zoom levels, use lower detail but larger areas
+      maxAreaSize = 0.1 * math.min(1.0, detailLevel);
+    } else if (zoomLevel < 15) {
+      // Medium zoom levels
+      maxAreaSize = 0.06 * math.min(1.0, detailLevel);
+    } else {
+      // High zoom levels, use smaller areas for more detail
+      maxAreaSize = 0.04 * math.min(1.0, detailLevel);
+    }
+    
+    // If current area is too large, focus on a smaller region
+    if (latDelta > maxAreaSize || lonDelta > maxAreaSize) {
+      final double halfSize = maxAreaSize / 2;
+      
+      return LatLngBounds(
+        LatLng(
+          center.latitude - halfSize,
+          center.longitude - halfSize
+        ),
+        LatLng(
+          center.latitude + halfSize,
+          center.longitude + halfSize
+        )
+      );
+    }
+    
+    // Otherwise use the original bounds
+    return visibleBounds;
+  }
+  
+  // Get appropriate detail level for current zoom bucket
+  double _getDetailLevel(int zoomBucket) {
+    switch (zoomBucket) {
+      case 1: return 0.2; // World - minimal detail
+      case 2: return 0.4; // Continental - low detail
+      case 3: return 0.6; // Regional - medium detail
+      case 4: return 0.8; // Local - high detail
+      case 5: return 1.0; // Fully zoomed - full detail
+      default: return 0.6;
     }
   }
 
@@ -306,6 +528,15 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
     final effectiveTheme = widget.theme == 'auto' 
         ? MediaQuery.of(context).platformBrightness == Brightness.dark ? 'dark' : 'vibrant'
         : widget.theme;
+    
+    // Optimize rendering based on zoom bucket
+    final bool showDetailedBuildings = _currentZoomBucket >= 4;
+    final bool showSimpleBuildings = _currentZoomBucket >= 3;
+    
+    // Don't render buildings at world or continental level unless zoomed in
+    if (_currentZoomBucket <= 2 && widget.zoomLevel < 10) {
+      return const SizedBox.shrink();
+    }
     
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -330,6 +561,60 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
           );
         }
         
+        // Show error overlay with retry button if there was a network error
+        if (_hasNetworkError) {
+          return Stack(
+            children: [
+              // Show existing buildings if we have them
+              if (_buildings.isNotEmpty)
+                CustomPaint(
+                  size: Size(
+                    constraints.maxWidth,
+                    constraints.maxHeight,
+                  ),
+                  painter: OSMBuildingsPainter(
+                    buildings: _buildings,
+                    tiltFactor: widget.tiltFactor,
+                    zoomLevel: widget.zoomLevel,
+                    visibleBounds: widget.visibleBounds,
+                    theme: effectiveTheme,
+                    zoomBucket: _currentZoomBucket,
+                    showDetails: showDetailedBuildings,
+                  ),
+                ),
+              
+              // Overlay with retry button
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.7),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Network error loading map data',
+                        style: TextStyle(color: Colors.white, fontSize: 16),
+                      ),
+                      const SizedBox(height: 8),
+                      ElevatedButton(
+                        onPressed: retryAfterNetworkError,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue,
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        }
+
         if (_buildings.isEmpty && _didInitialFetch) {
           // No buildings found but we did search
       return const SizedBox.shrink();
@@ -345,7 +630,9 @@ class _OSMBuildingsLayerState extends State<OSMBuildingsLayer> {
         tiltFactor: widget.tiltFactor,
         zoomLevel: widget.zoomLevel,
             visibleBounds: widget.visibleBounds,
-            theme: effectiveTheme, // Pass theme to painter
+            theme: effectiveTheme,
+            zoomBucket: _currentZoomBucket,
+            showDetails: showDetailedBuildings,
           ),
           // Add overlay for interactive building selection if needed
           child: widget.zoomLevel >= 17.0 ? GestureDetector(
@@ -377,6 +664,8 @@ class OSMBuildingsPainter extends CustomPainter {
   final double zoomLevel;
   final LatLngBounds visibleBounds;
   final String theme;
+  final int zoomBucket;
+  final bool showDetails;
   final math.Random _random = math.Random(42); // Add random generator with fixed seed
   
   OSMBuildingsPainter({
@@ -385,6 +674,8 @@ class OSMBuildingsPainter extends CustomPainter {
     required this.zoomLevel,
     required this.visibleBounds,
     required this.theme,
+    required this.zoomBucket,
+    required this.showDetails,
   });
   
   // Building color palettes for different themes
@@ -554,13 +845,78 @@ class OSMBuildingsPainter extends CustomPainter {
     final double latSpan = visibleBounds.north - visibleBounds.south;
     final double lngSpan = visibleBounds.east - visibleBounds.west;
     
-    for (var building in buildings) {
+    // Adaptive building rendering based on zoom bucket
+    final bool use3DRendering = zoomBucket >= 3 && tiltFactor > 0.05;
+    final bool useSimpleRendering = zoomBucket < 4;
+    final bool useWindowEffects = zoomBucket >= 5;
+    
+    // Culling optimization - don't process buildings that are too small
+    // or outside the visible bounds with a margin
+    final double visibleMargin = 0.1 * math.max(latSpan, lngSpan);
+    final LatLngBounds expandedBounds = LatLngBounds(
+      LatLng(visibleBounds.south - visibleMargin, visibleBounds.west - visibleMargin),
+      LatLng(visibleBounds.north + visibleMargin, visibleBounds.east + visibleMargin)
+    );
+    
+    // Optimization: Progressively render buildings - important ones first
+    List<Map<String, dynamic>> sortedBuildings = [...buildings];
+    
+    // Sort by importance if at detailed zoom levels
+    if (zoomBucket >= 4) {
+      sortedBuildings.sort((a, b) {
+        // Get building heights
+        final double heightA = a['height'] as double? ?? 10.0;
+        final double heightB = b['height'] as double? ?? 10.0;
+        
+        // Calculate importance based on height and type
+        double importanceA = _calculateBuildingImportance(a, heightA);
+        double importanceB = _calculateBuildingImportance(b, heightB);
+        
+        // Sort by importance (descending)
+        return importanceB.compareTo(importanceA);
+      });
+    }
+    
+    // Limit number of buildings to render based on zoom bucket
+    // for better performance
+    int maxBuildings;
+    switch (zoomBucket) {
+      case 1: maxBuildings = 0; break; // None at world level
+      case 2: maxBuildings = 50; break; // Very few at continental
+      case 3: maxBuildings = 200; break; // More at regional
+      case 4: maxBuildings = 500; break; // Many at local
+      case 5: maxBuildings = 1000; break; // All at street level
+      default: maxBuildings = 200;
+    }
+    
+    // Only limit if we have more buildings than the max
+    if (sortedBuildings.length > maxBuildings) {
+      sortedBuildings = sortedBuildings.sublist(0, maxBuildings);
+    }
+    
+    // Render buildings
+    for (var building in sortedBuildings) {
+      // Skip buildings without points or outside expanded bounds
       if (building['points'].isEmpty) continue;
+      
+      // Check if building is in the expanded bounds (quick check)
+      final List<LatLng> points = building['points'] as List<LatLng>;
+      bool isInBounds = false;
+      
+      // Just check one point for rough culling
+      for (final point in points) {
+        if (expandedBounds.contains(point)) {
+          isInBounds = true;
+          break;
+        }
+      }
+      
+      if (!isInBounds) continue;
       
       final path = Path();
       
       // Convert all nodes of the building to screen coordinates
-      final List<Offset> screenPoints = (building['points'] as List<LatLng>).map((point) {
+      final List<Offset> screenPoints = points.map((point) {
         final double x = ((point.longitude - visibleBounds.west) / lngSpan) * size.width;
         final double y = (1 - ((point.latitude - visibleBounds.south) / latSpan)) * size.height;
         return Offset(x, y);
@@ -581,40 +937,16 @@ class OSMBuildingsPainter extends CustomPainter {
       
       // Determine building type and height
       final Map<String, dynamic> tags = building['tags'] as Map<String, dynamic>;
-      final String buildingType = tags['building'] ?? 'yes';
       
-      // Default height if not specified
-      double height = 10.0;
-      
-      // Parse height from tags if available
-      if (tags.containsKey('height')) {
-        try {
-          height = double.parse(tags['height'] as String);
-        } catch (e) {
-          // If parse fails, use default height
-        }
-      } else if (tags.containsKey('building:levels')) {
-        try {
-          // Approximate 3 meters per level
-          height = double.parse(tags['building:levels'] as String) * 3.0;
-        } catch (e) {
-          // If parse fails, use default height
-        }
-      }
-      
-      // Adjust height for special building types
-      if (buildingType == 'cathedral' || buildingType == 'church') {
-        height = height * 1.5;
-      } else if (buildingType == 'skyscraper') {
-        height = height * 2.0;
-      }
+      // Get height (either from preprocessed data or calculate)
+      double height = building['height'] as double? ?? _getBuildingHeight(tags);
       
       // Get colors based on building type
       final Color wallColor = _getBuildingColor(tags);
       final Color roofColor = _getRoofColor(tags);
       
       // For higher zoom levels, draw enhanced buildings with 3D effect
-      if (zoomLevel >= 15.0) {
+      if (use3DRendering) {
         _drawEnhancedBuilding(
           canvas,
           path,
@@ -624,6 +956,7 @@ class OSMBuildingsPainter extends CustomPainter {
           screenPoints,
           zoomLevel,
           tags,
+          useWindowEffects,
         );
       } else {
         // For lower zoom levels, use simpler rendering
@@ -649,6 +982,77 @@ class OSMBuildingsPainter extends CustomPainter {
         canvas.drawPath(path, outlinePaint);
       }
     }
+  }
+  
+  // Calculate building importance for rendering priority
+  double _calculateBuildingImportance(Map<String, dynamic> building, double height) {
+    double importance = height;
+    final Map<String, dynamic> tags = building['tags'] as Map<String, dynamic>;
+    final String buildingType = tags['building'] ?? 'yes';
+    
+    // Boost importance for special buildings
+    switch (buildingType) {
+      case 'commercial':
+      case 'retail':
+      case 'office':
+        importance *= 1.5;
+        break;
+      case 'school':
+      case 'university':
+      case 'college':
+      case 'hospital':
+      case 'civic':
+      case 'public':
+        importance *= 2.0;
+        break;
+      case 'cathedral':
+      case 'church':
+      case 'synagogue':
+      case 'mosque':
+      case 'temple':
+      case 'landmark':
+        importance *= 3.0;
+        break;
+    }
+    
+    // Named buildings are more important
+    if (tags.containsKey('name')) {
+      importance *= 1.5;
+    }
+    
+    return importance;
+  }
+  
+  // Helper method to get building height from tags
+  double _getBuildingHeight(Map<String, dynamic> tags) {
+    // Default height if not specified
+    double height = 10.0;
+    
+    // Parse height from tags if available
+    if (tags.containsKey('height')) {
+      try {
+        height = double.parse(tags['height'] as String);
+      } catch (e) {
+        // If parse fails, use default height
+      }
+    } else if (tags.containsKey('building:levels')) {
+      try {
+        // Approximate 3 meters per level
+        height = double.parse(tags['building:levels'] as String) * 3.0;
+      } catch (e) {
+        // If parse fails, use default height
+      }
+    }
+    
+    // Adjust height for special building types
+    final String buildingType = tags['building'] ?? 'yes';
+    if (buildingType == 'cathedral' || buildingType == 'church') {
+      height = height * 1.5;
+    } else if (buildingType == 'skyscraper') {
+      height = height * 2.0;
+    }
+    
+    return height;
   }
   
   // Gets the appropriate building color based on building type and theme
@@ -700,38 +1104,6 @@ class OSMBuildingsPainter extends CustomPainter {
     return buildingType;
   }
   
-  // Helper method to get building height from tags
-  double _getBuildingHeight(Map<String, dynamic> tags) {
-    // Default height if not specified
-    double height = 10.0;
-    
-    // Parse height from tags if available
-    if (tags.containsKey('height')) {
-      try {
-        height = double.parse(tags['height'] as String);
-      } catch (e) {
-        // If parse fails, use default height
-      }
-    } else if (tags.containsKey('building:levels')) {
-      try {
-        // Approximate 3 meters per level
-        height = double.parse(tags['building:levels'] as String) * 3.0;
-      } catch (e) {
-        // If parse fails, use default height
-      }
-    }
-    
-    // Adjust height for special building types
-    final String buildingType = tags['building'] ?? 'yes';
-    if (buildingType == 'cathedral' || buildingType == 'church') {
-      height = height * 1.5;
-    } else if (buildingType == 'skyscraper') {
-      height = height * 2.0;
-    }
-    
-    return height;
-  }
-  
   // Gets the roof color based on building type and theme
   Color _getRoofColor(Map<String, dynamic> tags) {
     final String buildingType = _getBuildingType(tags);
@@ -756,6 +1128,7 @@ class OSMBuildingsPainter extends CustomPainter {
     List<Offset> points,
     double zoomLevel,
     Map<String, dynamic> tags,
+    bool useWindowEffects,
   ) {
     // Skip if too small
     if (height < 1.0 || points.length < 3) return;
@@ -913,7 +1286,7 @@ class OSMBuildingsPainter extends CustomPainter {
       canvas.drawPath(wallPath, edgePaint);
       
       // Add windows on walls if building is big enough and zoom level is sufficient
-      if (projectedHeight >= 5.0 && zoomLevel >= 16.0 && (p1 - p2).distance >= 8.0) {
+      if (useWindowEffects && projectedHeight >= 5.0 && zoomLevel >= 16.0 && (p1 - p2).distance >= 8.0) {
         _addWindowsToWall(
           canvas, 
           p1, p2, p4, p3, 
@@ -1079,6 +1452,8 @@ class OSMBuildingsPainter extends CustomPainter {
            oldDelegate.tiltFactor != tiltFactor ||
            oldDelegate.zoomLevel != zoomLevel ||
            oldDelegate.visibleBounds != visibleBounds ||
-           oldDelegate.theme != theme;
+           oldDelegate.theme != theme ||
+           oldDelegate.zoomBucket != zoomBucket ||
+           oldDelegate.showDetails != showDetails;
   }
 } 

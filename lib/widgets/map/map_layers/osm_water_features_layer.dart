@@ -5,6 +5,8 @@ import 'dart:math' as math;
 import 'dart:ui'; // Explicitly import dart:ui for Path
 
 import 'osm_data_processor.dart';
+import '../../../services/map_cache_manager.dart';
+import '../map_caching/map_cache_extension.dart';
 
 /// A custom layer to render OpenStreetMap water features in 2.5D
 class OSMWaterFeaturesLayer extends StatefulWidget {

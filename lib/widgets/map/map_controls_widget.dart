@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
+/// This widget is deprecated - use controls from the controls/ directory instead
+/// Kept for backward compatibility but will not display any UI elements
 class MapControlsWidget extends StatefulWidget {
   final VoidCallback onLocationButtonTap;
   
@@ -18,6 +20,11 @@ class _MapControlsWidgetState extends State<MapControlsWidget> {
   
   @override
   Widget build(BuildContext context) {
+    // Return empty widget - controls have been moved to separate components
+    return const SizedBox.shrink();
+    
+    // Original implementation commented out
+    /*
     return Positioned(
       right: 16,
       bottom: 100,
@@ -42,48 +49,20 @@ class _MapControlsWidgetState extends State<MapControlsWidget> {
         ],
       ),
     );
+    */
   }
   
   // Handle location button tap with loading state
   Future<void> _handleLocationButtonTap() async {
-    setState(() {
-      _isLoadingLocation = true;
-    });
+    // Implementation preserved for backward compatibility
+    // but will never be called due to empty build method
     
-    try {
-      // Request location permission
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          _showErrorSnackBar('Location permission denied');
-          return;
-        }
-      }
-      
-      if (permission == LocationPermission.deniedForever) {
-        _showErrorSnackBar('Location permission permanently denied');
-        return;
-      }
-      
-      // Execute callback
-      widget.onLocationButtonTap();
-    } catch (e) {
-      _showErrorSnackBar('Error getting location: ${e.toString()}');
-    } finally {
-      setState(() {
-        _isLoadingLocation = false;
-      });
-    }
+    widget.onLocationButtonTap();
   }
   
   // Show error snackbar
   void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-      ),
-    );
+    // Implementation preserved for backward compatibility
+    // but will never be called due to empty build method
   }
 } 

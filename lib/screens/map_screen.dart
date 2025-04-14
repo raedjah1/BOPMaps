@@ -8,6 +8,7 @@ import '../widgets/map/leaflet_map_widget.dart';
 import '../widgets/navigation/top_navigation_bar.dart';
 import '../widgets/navigation/bottom_navigation_bar.dart';
 import '../config/constants.dart';
+import '../widgets/map/controls/map_controls.dart';
 
 class MapScreen extends StatefulWidget {
   static const String routeName = '/map';
@@ -361,102 +362,35 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         ),
         
         // Current location button and compass with animation
-        AnimatedPositioned(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-          bottom: _showZoomControls ? 90 : -60,
-          right: 16,
-          child: _buildMapControls(),
-        ),
-        
-        // Dynamic status messages (discoveries, etc)
-        _buildStatusMessages(),
-      ],
-    );
-  }
-  
-  // Map controls (location, compass, etc)
-  Widget _buildMapControls() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        FloatingActionButton.small(
-          heroTag: 'current_location',
-          backgroundColor: Colors.white,
-          foregroundColor: Theme.of(context).primaryColor,
-          child: const Icon(Icons.my_location),
-          onPressed: () {
-            // Center map on current location with animation
-            if (_mapProvider.currentPosition != null) {
-              if (!_useLeafletMap && _mapKey.currentState != null) {
-                _mapKey.currentState!.animateToLocation(
-                  _mapProvider.currentPosition!.latitude,
-                  _mapProvider.currentPosition!.longitude,
-                  zoom: 16.0,
-                );
-              } else {
-                _mapProvider.updateViewport(
-                  latitude: _mapProvider.currentPosition!.latitude,
-                  longitude: _mapProvider.currentPosition!.longitude,
-                  zoom: 16.0,
-                );
-              }
-              
-              // Turn on location tracking
-              if (!_mapProvider.isLocationTracking) {
-                _mapProvider.toggleLocationTracking();
-              }
+        MapNavigationControls(
+          mapProvider: _mapProvider,
+          useLeafletMap: _useLeafletMap,
+          isVisible: _showZoomControls,
+          animateToLocation: (latitude, longitude, {zoom}) {
+            if (!_useLeafletMap && _mapKey.currentState != null) {
+              _mapKey.currentState!.animateToLocation(
+                latitude,
+                longitude,
+                zoom: zoom ?? 16.0,
+              );
+            } else {
+              _mapProvider.updateViewport(
+                latitude: latitude,
+                longitude: longitude,
+                zoom: zoom ?? 16.0,
+              );
             }
           },
-        ),
-        const SizedBox(height: 8),
-        FloatingActionButton.small(
-          heroTag: 'compass',
-          backgroundColor: Colors.white,
-          foregroundColor: Theme.of(context).primaryColor,
-          child: const Icon(Icons.compass_calibration),
-          onPressed: () {
-            // Reset map rotation and tilt
+          resetMapView: () {
             if (!_useLeafletMap && _mapKey.currentState != null) {
               _mapKey.currentState!.resetMapView();
             }
           },
         ),
+        
+        // Dynamic status messages (errors, etc)
+        const StatusMessagesWidget(),
       ],
-    );
-  }
-  
-  // Status messages for errors, notifications
-  Widget _buildStatusMessages() {
-    return Consumer<MapProvider>(
-      builder: (context, mapProvider, _) {
-        if (mapProvider.hasNetworkError) {
-          return Positioned(
-            top: 16,
-            left: 16,
-            right: 16,
-            child: Card(
-              color: Colors.red.shade100,
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Row(
-                  children: [
-                    const Icon(Icons.error_outline, color: Colors.red),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        mapProvider.errorMessage,
-                        style: const TextStyle(color: Colors.red),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        }
-        return const SizedBox.shrink();
-      },
     );
   }
   

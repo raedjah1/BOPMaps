@@ -11,33 +11,57 @@ class OSMDataProcessor {
   final Map<String, dynamic> _dataCache = {};
   
   // Timeout duration for API requests
-  final Duration _timeout = const Duration(seconds: 15);
+  final Duration _timeout = const Duration(seconds: 20); // Increased timeout
   
   // API throttling control - improve to avoid quota issues
   DateTime _lastRequestTime = DateTime.now().subtract(const Duration(seconds: 30));
-  Duration _minimumTimeBetweenRequests = const Duration(seconds: 10); // Increased from 5s to 10s
+  Duration _minimumTimeBetweenRequests = const Duration(seconds: 15); // Keep the increased value (15s)
   int _consecutiveErrors = 0;
-  static const _maxConsecutiveErrors = 3;
+  static const _maxConsecutiveErrors = 5; // Increased from 3
   
   // Exponential backoff for rate limiting
   Duration _currentBackoff = const Duration(seconds: 15);
-  static const _maxBackoff = Duration(seconds: 60);
+  static const _maxBackoff = Duration(seconds: 90); // Increased to 1.5 minutes
+  
+  // Adaptive rate limiting based on response times
+  bool _isRateLimited = false;
+  DateTime _rateLimitResetTime = DateTime.now();
+  int _successfulRequestsCount = 0;
+  static const _successfulRequestThreshold = 10; // After this many successful requests, reduce backoff
   
   // List of alternate Overpass API endpoints to try
   final List<String> _overpassEndpoints = [
     'https://overpass-api.de/api/interpreter',
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-    'https://overpass.openstreetmap.fr/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.openstreetmap.fr/api/interpreter', // Moved to end as it seems unreliable
   ];
   int _currentEndpointIndex = 0;
 
   // Track endpoint performance
   final Map<String, int> _endpointErrorCounts = {};
+  final Map<String, DateTime> _endpointLastSuccess = {};
+  final Map<String, bool> _endpointDisabled = {};
+  
+  // Network connectivity flag
+  bool _isNetworkConnected = true;
   
   // Check if we need to throttle our requests
   Future<void> _throttleRequests() async {
     final now = DateTime.now();
+    
+    // If we're rate limited, wait until reset time
+    if (_isRateLimited) {
+      if (now.isBefore(_rateLimitResetTime)) {
+        final waitTime = _rateLimitResetTime.difference(now);
+        debugPrint('Rate limited by Overpass API, waiting for ${waitTime.inSeconds}s');
+        await Future.delayed(waitTime);
+        _isRateLimited = false; // Reset after waiting
+      } else {
+        _isRateLimited = false; // Reset time has passed
+      }
+    }
+    
     final timeSinceLastRequest = now.difference(_lastRequestTime);
     
     // If we've had errors recently, apply exponential backoff
@@ -48,40 +72,223 @@ class OSMDataProcessor {
     if (timeSinceLastRequest < effectiveDelay) {
       // Wait until we can make another request
       final waitTime = effectiveDelay - timeSinceLastRequest;
-      debugPrint('Throttling Overpass API request, waiting for ${waitTime.inMilliseconds}ms');
-      await Future.delayed(waitTime);
+      
+      // Cap maximum wait time to prevent excessive delays
+      final cappedWaitTime = Duration(milliseconds: math.min(waitTime.inMilliseconds, 20000));
+      
+      debugPrint('Throttling Overpass API request, waiting for ${cappedWaitTime.inMilliseconds}ms');
+      await Future.delayed(cappedWaitTime);
     }
+    
+    _lastRequestTime = DateTime.now();
   }
   
   // Handle API errors with better backoff strategy
   void _handleApiError(String errorMessage) {
     debugPrint('API Error: $errorMessage');
+    
+    // Track this endpoint's error
+    final currentEndpoint = _overpassEndpoints[_currentEndpointIndex];
+    _endpointErrorCounts[currentEndpoint] = (_endpointErrorCounts[currentEndpoint] ?? 0) + 1;
+    
     _incrementErrorCounter();
     
-    // Implement exponential backoff
+    // Check for rate limiting in error message
+    if (errorMessage.toLowerCase().contains('rate limit') || 
+        errorMessage.toLowerCase().contains('too many requests') ||
+        errorMessage.contains('429')) {
+      
+      _isRateLimited = true;
+      // Set a reset time 2 minutes in the future
+      _rateLimitResetTime = DateTime.now().add(const Duration(minutes: 2));
+      debugPrint('Rate limit detected, suspending requests until ${_rateLimitResetTime.toString()}');
+    }
+    
+    // Implement exponential backoff with a maximum cap
     _currentBackoff = Duration(seconds: math.min(
       _currentBackoff.inSeconds * 2, 
       _maxBackoff.inSeconds
     ));
     
     debugPrint('Backoff increased to ${_currentBackoff.inSeconds} seconds');
+    
+    // If this endpoint has too many errors, disable it temporarily
+    if ((_endpointErrorCounts[currentEndpoint] ?? 0) > 5) {
+      _endpointDisabled[currentEndpoint] = true;
+      debugPrint('Temporarily disabling endpoint: $currentEndpoint due to multiple errors');
+      
+      // Schedule re-enabling after some time
+      Future.delayed(const Duration(minutes: 5), () {
+        _endpointDisabled[currentEndpoint] = false;
+        _endpointErrorCounts[currentEndpoint] = 0;
+        debugPrint('Re-enabling endpoint: $currentEndpoint');
+      });
+    }
   }
   
   // Reset backoff on successful request
   void _handleSuccessfulRequest() {
     _consecutiveErrors = 0;
-    _currentBackoff = const Duration(seconds: 15);
+    _successfulRequestsCount++;
+    
+    // Gradually reduce backoff after successful requests
+    if (_successfulRequestsCount >= _successfulRequestThreshold) {
+      _currentBackoff = Duration(seconds: math.max(
+        _currentBackoff.inSeconds ~/ 1.5, 
+        15
+      ));
+      _successfulRequestsCount = 0;
+      debugPrint('Reducing backoff to ${_currentBackoff.inSeconds}s after successful requests');
+    }
+    
+    // Track successful request for this endpoint
+    final currentEndpoint = _overpassEndpoints[_currentEndpointIndex];
+    _endpointLastSuccess[currentEndpoint] = DateTime.now();
+  }
+
+  // Helper for rotating through different endpoints with improved selection logic
+  void _rotateEndpoint() {
+    // Get current endpoint for logging
+    final currentEndpoint = _overpassEndpoints[_currentEndpointIndex];
+    debugPrint('Rotating from endpoint: $currentEndpoint');
+    
+    // Prioritize endpoints with recent successes and fewer errors
+    final activeEndpoints = _overpassEndpoints.where((endpoint) => 
+      !(_endpointDisabled[endpoint] ?? false)).toList();
+    
+    if (activeEndpoints.isEmpty) {
+      // All endpoints are disabled, re-enable the one with the fewest errors
+      final sorted = _overpassEndpoints.toList()
+        ..sort((a, b) => (_endpointErrorCounts[a] ?? 0).compareTo(_endpointErrorCounts[b] ?? 0));
+      
+      _endpointDisabled[sorted.first] = false;
+      _currentEndpointIndex = _overpassEndpoints.indexOf(sorted.first);
+      debugPrint('All endpoints were disabled. Re-enabling: ${_overpassEndpoints[_currentEndpointIndex]}');
+      return;
+    }
+    
+    // Try to use endpoints with successful history first
+    final endpointsWithSuccess = activeEndpoints.where((endpoint) => 
+      _endpointLastSuccess.containsKey(endpoint)).toList();
+    
+    if (endpointsWithSuccess.isNotEmpty) {
+      // Sort by most recent success
+      endpointsWithSuccess.sort((a, b) => 
+        (_endpointLastSuccess[b]?.compareTo(_endpointLastSuccess[a] ?? DateTime(2000)) ?? 0));
+      
+      _currentEndpointIndex = _overpassEndpoints.indexOf(endpointsWithSuccess.first);
+    } else {
+      // No success history, sort by fewest errors
+      activeEndpoints.sort((a, b) => 
+        (_endpointErrorCounts[a] ?? 0).compareTo(_endpointErrorCounts[b] ?? 0));
+      
+      _currentEndpointIndex = _overpassEndpoints.indexOf(activeEndpoints.first);
+    }
+    
+    debugPrint('Switching to Overpass endpoint: ${_overpassEndpoints[_currentEndpointIndex]}');
   }
   
+  // Increment error counter and handle consecutive errors with improved logic
+  void _incrementErrorCounter() {
+    _consecutiveErrors++;
+    debugPrint('Consecutive API errors: $_consecutiveErrors');
+    
+    // If too many errors, rotate endpoints
+    if (_consecutiveErrors >= _maxConsecutiveErrors) {
+      _rotateEndpoint();
+    }
+    
+    // If we hit a very high number of errors, assume network is down
+    if (_consecutiveErrors >= _maxConsecutiveErrors * 3) {
+      _isNetworkConnected = false;
+      debugPrint('Network connectivity issues detected. Suspending requests temporarily.');
+      
+      // Reset after some time
+      Future.delayed(const Duration(minutes: 2), () {
+        _isNetworkConnected = true;
+        _consecutiveErrors = math.max(0, _consecutiveErrors - 10);
+        debugPrint('Resuming requests after network connectivity pause');
+      });
+    }
+  }
+
+  // Allow external callers to clear error state
+  void resetErrorState() {
+    _consecutiveErrors = 0;
+    _currentBackoff = const Duration(seconds: 15);
+    _isNetworkConnected = true;
+    debugPrint('Error state reset externally. Resuming normal operation.');
+  }
+  
+  // Check cache size and prune if needed
+  void _pruneCache() {
+    // Keep the cache size manageable
+    if (_dataCache.length > 100) {
+      // Simple approach: remove 20% of oldest entries
+      // In a real app, would use LRU or more sophisticated algorithm
+      final keysToRemove = _dataCache.keys.take(_dataCache.length ~/ 5).toList();
+      for (final key in keysToRemove) {
+        _dataCache.remove(key);
+      }
+      debugPrint('Pruned OSM data cache. Removed ${keysToRemove.length} entries.');
+    }
+  }
+  
+  // Fetch data with retry logic - used for all API calls
+  Future<Map<String, dynamic>?> _fetchWithRetry(String query, String endpoint, {int retries = 2}) async {
+    if (!_isNetworkConnected && _consecutiveErrors >= _maxConsecutiveErrors * 3) {
+      debugPrint('Network connectivity issues detected. Skipping request.');
+      return null;
+    }
+    
+    int attempts = 0;
+    while (attempts <= retries) {
+      try {
+        final response = await http.post(
+          Uri.parse(endpoint),
+          body: query,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'BOPMaps/1.0 (Flutter App; contact@bopmaps.com)'
+          }
+        ).timeout(_timeout);
+        
+        if (response.statusCode == 200) {
+          // Parse and return the data
+          final Map<String, dynamic> data = json.decode(response.body);
+          return data;
+        } else {
+          debugPrint('Failed request (${response.statusCode}): ${response.body.substring(0, math.min(100, response.body.length))}');
+          attempts++;
+          
+          if (attempts <= retries) {
+            // Wait briefly before retrying
+            await Future.delayed(Duration(milliseconds: 500 * attempts));
+          }
+        }
+      } catch (e) {
+        debugPrint('Error during fetch: $e');
+        attempts++;
+        
+        if (attempts <= retries) {
+          // Wait before retrying
+          await Future.delayed(Duration(seconds: attempts));
+        }
+      }
+    }
+    
+    return null; // Return null after all retries failed
+  }
+
   /// Fetches building data from the Overpass API for a given bounding box
-  Future<List<Map<String, dynamic>>> fetchBuildingData(LatLng southwest, LatLng northeast) async {
+  Future<List<Map<String, dynamic>>> fetchBuildingData(LatLng southwest, LatLng northeast, {double detailLevel = 1.0}) async {
     // Check for valid bounds
     if (southwest.latitude > northeast.latitude || southwest.longitude > northeast.longitude) {
       debugPrint('Invalid bounds provided for Overpass API query');
       return [];
     }
     
-    final String cacheKey = 'buildings_${southwest.latitude.toStringAsFixed(4)}_${southwest.longitude.toStringAsFixed(4)}_${northeast.latitude.toStringAsFixed(4)}_${northeast.longitude.toStringAsFixed(4)}';
+    final String cacheKey = 'buildings_${southwest.latitude.toStringAsFixed(4)}_${southwest.longitude.toStringAsFixed(4)}_${northeast.latitude.toStringAsFixed(4)}_${northeast.longitude.toStringAsFixed(4)}_${detailLevel.toStringAsFixed(1)}';
     
     // Return cached data if available
     if (_dataCache.containsKey(cacheKey)) {
@@ -93,16 +300,9 @@ class OSMDataProcessor {
     await _throttleRequests();
     
     // Check if we've had too many consecutive errors
-    if (_consecutiveErrors >= _maxConsecutiveErrors * 2) {
-      // If way too many errors, return empty data and try a different endpoint next time
-      debugPrint('Too many consecutive errors, temporarily suspending OSM API requests');
-      _rotateEndpoint();
-      
-      // Schedule a reset of the error counter after some time
-      Future.delayed(const Duration(minutes: 5), () {
-        _consecutiveErrors = math.max(0, _consecutiveErrors - 2);
-      });
-      
+    if (_consecutiveErrors >= _maxConsecutiveErrors * 2 || !_isNetworkConnected || _isRateLimited) {
+      // If way too many errors or network issues, return empty data
+      debugPrint('Too many consecutive errors, network issues, or rate limited. Skipping OSM API requests');
       return [];
     }
     
@@ -114,31 +314,53 @@ class OSMDataProcessor {
     LatLng newSW = southwest;
     LatLng newNE = northeast;
     
-    // Limit to about 0.04 degrees (approximately 4km) - reduced from previous 0.05
-    if (latDelta > 0.04 || lonDelta > 0.04) {
+    // Calculate maximum area size based on zoom level (implied by detailLevel)
+    double maxAreaSize;
+    if (detailLevel < 0.3) {
+      // Very low detail (far zoom) - can use larger area with fewer buildings
+      maxAreaSize = 0.1;
+    } else if (detailLevel < 0.6) {
+      // Medium detail
+      maxAreaSize = 0.06;
+    } else {
+      // High detail (close zoom) - use smaller area with more detailed buildings
+      maxAreaSize = 0.04;
+    }
+    
+    if (latDelta > maxAreaSize || lonDelta > maxAreaSize) {
       final LatLng center = LatLng(
         southwest.latitude + latDelta * 0.5,
         southwest.longitude + lonDelta * 0.5
       );
       
+      final double halfSize = maxAreaSize / 2;
+      
       newSW = LatLng(
-        center.latitude - 0.02,
-        center.longitude - 0.02
+        center.latitude - halfSize,
+        center.longitude - halfSize
       );
       
       newNE = LatLng(
-        center.latitude + 0.02,
-        center.longitude + 0.02
+        center.latitude + halfSize,
+        center.longitude + halfSize
       );
       
-      debugPrint('Area too large, reducing building query size to center region');
+      debugPrint('Area too large for detailLevel $detailLevel, reducing query size to ${maxAreaSize}x${maxAreaSize} degrees');
     }
     
     // Construct Overpass API query for buildings with proper syntax
+    // Use detailLevel to adjust the complexity of the query
+    String buildingFilter = '"building"';
+    
+    // For lower detail levels, only query significant buildings
+    if (detailLevel < 0.5) {
+      buildingFilter = '"building"~"commercial|office|retail|public|civic|government|hospital|school|university|college|church|hotel|apartments"';
+    }
+    
     final String query = '''
       [out:json][timeout:25];
       (
-        way["building"](${newSW.latitude},${newSW.longitude},${newNE.latitude},${newNE.longitude});
+        way[$buildingFilter](${newSW.latitude},${newSW.longitude},${newNE.latitude},${newNE.longitude});
       );
       out body geom;
     ''';
@@ -150,20 +372,14 @@ class OSMDataProcessor {
       final endpoint = _overpassEndpoints[_currentEndpointIndex];
       
       debugPrint('Fetching building data from $endpoint for area: ${newSW.latitude},${newSW.longitude},${newNE.latitude},${newNE.longitude}');
-      final response = await http.post(
-        Uri.parse(endpoint),
-        body: query,
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'BOPMaps/1.0 (Flutter App; contact@bopmaps.com)'
-        }
-      ).timeout(_timeout);
       
-      if (response.statusCode == 200) {
+      // Use the new _fetchWithRetry method for more robust API calls
+      final data = await _fetchWithRetry(query, endpoint);
+      
+      if (data != null) {
         // Reset consecutive error counter on success
         _handleSuccessfulRequest();
         
-        final Map<String, dynamic> data = json.decode(response.body);
         final List<dynamic> elements = data['elements'] ?? [];
         
         debugPrint('Received ${elements.length} building elements');
@@ -196,21 +412,58 @@ class OSMDataProcessor {
                 'height': height,
                 'points': points,
                 'tags': building['tags'],
+                'detailLevel': detailLevel, // Store the detail level for reference
               };
             })
             .toList();
         
+        // Apply additional filtering based on detail level if needed
+        List<Map<String, dynamic>> filteredBuildings = buildings;
+        
+        // For very low detail levels, limit the number of buildings returned
+        // This ensures we don't overwhelm the renderer at low zoom levels
+        if (detailLevel < 0.3) {
+          int maxBuildings = 30;
+          if (buildings.length > maxBuildings) {
+            // Sort by building height to keep the most significant buildings
+            filteredBuildings = buildings
+                .toList()
+                ..sort((a, b) => (b['height'] as double).compareTo(a['height'] as double));
+            filteredBuildings = filteredBuildings.take(maxBuildings).toList();
+            debugPrint('Detail level ${detailLevel.toStringAsFixed(1)}: filtered to $maxBuildings buildings');
+          }
+        } else if (detailLevel < 0.6) {
+          int maxBuildings = 100;
+          if (buildings.length > maxBuildings) {
+            filteredBuildings = buildings
+                .toList()
+                ..sort((a, b) => (b['height'] as double).compareTo(a['height'] as double));
+            filteredBuildings = filteredBuildings.take(maxBuildings).toList();
+            debugPrint('Detail level ${detailLevel.toStringAsFixed(1)}: filtered to $maxBuildings buildings');
+          }
+        } else if (detailLevel < 0.8) {
+          int maxBuildings = 250;
+          if (buildings.length > maxBuildings) {
+            filteredBuildings = buildings.take(maxBuildings).toList();
+            debugPrint('Detail level ${detailLevel.toStringAsFixed(1)}: filtered to $maxBuildings buildings');
+          }
+        }
+        
         // Cache the processed data
-        _dataCache[cacheKey] = buildings;
-        return buildings;
+        _dataCache[cacheKey] = filteredBuildings;
+        
+        // Prune cache if needed
+        _pruneCache();
+        
+        return filteredBuildings;
       } else {
-        debugPrint('Failed to fetch buildings: ${response.statusCode} - ${response.body}');
-        _handleApiError('Failed to fetch buildings');
+        // Failed to get data
+        _handleApiError('Failed to fetch buildings: null response');
         return [];
       }
     } catch (e) {
       debugPrint('Error fetching building data: $e');
-      _handleApiError('Error fetching building data');
+      _handleApiError('Error fetching building data: $e');
       return [];
     }
   }
@@ -745,9 +998,8 @@ class OSMDataProcessor {
     await _throttleRequests();
     
     // Check if we've had too many consecutive errors
-    if (_consecutiveErrors >= _maxConsecutiveErrors * 2) {
-      debugPrint('Too many consecutive errors, temporarily suspending OSM API requests');
-      _rotateEndpoint();
+    if (_consecutiveErrors >= _maxConsecutiveErrors * 2 || !_isNetworkConnected) {
+      debugPrint('Too many consecutive errors or network issues, skipping OSM API requests');
       return [];
     }
     
@@ -803,20 +1055,14 @@ class OSMDataProcessor {
       final endpoint = _overpassEndpoints[_currentEndpointIndex];
       
       debugPrint('Fetching water features data from $endpoint for area: ${newSW.latitude},${newSW.longitude},${newNE.latitude},${newNE.longitude}');
-      final response = await http.post(
-        Uri.parse(endpoint),
-        body: query,
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'BOPMaps/1.0 (Flutter App; contact@bopmaps.com)'
-        }
-      ).timeout(_timeout);
       
-      if (response.statusCode == 200) {
+      // Use the new _fetchWithRetry method for more robust API calls
+      final data = await _fetchWithRetry(query, endpoint);
+      
+      if (data != null) {
         // Reset consecutive error counter on success
         _handleSuccessfulRequest();
         
-        final Map<String, dynamic> data = json.decode(response.body);
         final List<dynamic> elements = data['elements'] ?? [];
         
         debugPrint('Received ${elements.length} water feature elements');
@@ -865,10 +1111,14 @@ class OSMDataProcessor {
         
         // Cache the processed data
         _dataCache[cacheKey] = waterFeatures;
+        
+        // Prune cache if needed
+        _pruneCache();
+        
         return waterFeatures;
       } else {
-        debugPrint('Failed to fetch water features: ${response.statusCode} - ${response.body}');
-        _handleApiError('Failed to fetch water features');
+        // Failed to get data
+        _handleApiError('Failed to fetch water features: null response');
         return [];
       }
     } catch (e) {
@@ -910,9 +1160,8 @@ class OSMDataProcessor {
     await _throttleRequests();
     
     // Check if we've had too many consecutive errors
-    if (_consecutiveErrors >= _maxConsecutiveErrors * 2) {
-      debugPrint('Too many consecutive errors, temporarily suspending OSM API requests');
-      _rotateEndpoint();
+    if (_consecutiveErrors >= _maxConsecutiveErrors * 2 || !_isNetworkConnected) {
+      debugPrint('Too many consecutive errors or network issues, skipping OSM API requests');
       return {};
     }
     
@@ -969,20 +1218,14 @@ class OSMDataProcessor {
       final endpoint = _overpassEndpoints[_currentEndpointIndex];
       
       debugPrint('Fetching parks data from $endpoint for area: ${newSW.latitude},${newSW.longitude},${newNE.latitude},${newNE.longitude}');
-      final response = await http.post(
-        Uri.parse(endpoint),
-        body: query,
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'BOPMaps/1.0 (Flutter App; contact@bopmaps.com)'
-        }
-      ).timeout(_timeout);
       
-      if (response.statusCode == 200) {
+      // Use the new _fetchWithRetry method for more robust API calls
+      final data = await _fetchWithRetry(query, endpoint);
+      
+      if (data != null) {
         // Reset consecutive error counter on success
         _handleSuccessfulRequest();
         
-        final Map<String, dynamic> data = json.decode(response.body);
         final List<dynamic> elements = data['elements'] ?? [];
         
         debugPrint('Received ${elements.length} park/vegetation elements');
@@ -1037,10 +1280,14 @@ class OSMDataProcessor {
         
         // Cache the processed data
         _dataCache[cacheKey] = result;
+        
+        // Prune cache if needed
+        _pruneCache();
+        
         return result;
       } else {
-        debugPrint('Failed to fetch parks data: ${response.statusCode} - ${response.body}');
-        _handleApiError('Failed to fetch parks data');
+        // Failed to get data
+        _handleApiError('Failed to fetch parks data: null response');
         return {};
       }
     } catch (e) {
@@ -1053,37 +1300,5 @@ class OSMDataProcessor {
   /// Clears the data cache
   void clearCache() {
     _dataCache.clear();
-  }
-
-  // Helper for rotating through different endpoints
-  void _rotateEndpoint() {
-    // Track errors for this endpoint
-    final currentEndpoint = _overpassEndpoints[_currentEndpointIndex];
-    _endpointErrorCounts[currentEndpoint] = (_endpointErrorCounts[currentEndpoint] ?? 0) + 1;
-    
-    // Select the endpoint with the fewest errors
-    if (_endpointErrorCounts.length > 1) {
-      final sorted = _overpassEndpoints.toList()
-        ..sort((a, b) => (_endpointErrorCounts[a] ?? 0).compareTo(_endpointErrorCounts[b] ?? 0));
-      
-      final bestEndpoint = sorted.first;
-      _currentEndpointIndex = _overpassEndpoints.indexOf(bestEndpoint);
-    } else {
-      // Simple rotation if we don't have error stats yet
-      _currentEndpointIndex = (_currentEndpointIndex + 1) % _overpassEndpoints.length;
-    }
-    
-    debugPrint('Switching to Overpass endpoint: ${_overpassEndpoints[_currentEndpointIndex]}');
-  }
-  
-  // Increment error counter and handle consecutive errors
-  void _incrementErrorCounter() {
-    _consecutiveErrors++;
-    debugPrint('Consecutive API errors: $_consecutiveErrors');
-    
-    // If too many errors, rotate endpoints
-    if (_consecutiveErrors >= _maxConsecutiveErrors) {
-      _rotateEndpoint();
-    }
   }
 } 

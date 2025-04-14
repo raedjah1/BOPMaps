@@ -4,6 +4,8 @@ import 'package:latlong2/latlong.dart';
 import 'dart:math' as math;
 
 import 'osm_data_processor.dart';
+import '../../../services/map_cache_manager.dart';
+import '../map_caching/map_cache_extension.dart';
 import '../map_styles.dart';
 
 /// A custom layer to render OpenStreetMap Points of Interest (POIs)

@@ -31,9 +31,20 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
-    // Force refresh map data on init
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    
+    // Force refresh map data on init and request location first
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       final mapProvider = Provider.of<MapProvider>(context, listen: false);
+      
+      // First request location permission and get location
+      try {
+        await mapProvider.requestLocationPermission();
+        debugPrint('Location permission requested in MapScreen');
+      } catch (e) {
+        debugPrint('Error requesting location permission: $e');
+      }
+      
+      // Then refresh pins
       mapProvider.refreshPins();
     });
   }

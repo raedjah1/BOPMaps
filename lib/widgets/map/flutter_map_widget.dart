@@ -56,7 +56,7 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
   Animation<double>? _zoomAnimation;
 
   // Building detail level - initialize with a default
-  int _buildingDetailLevel = 2;
+  int _buildingDetailLevel = 3; // Changed from 2 to 3 for high detail
   bool _isMapInitialized = false;
   bool _isFirstLoad = true;
   
@@ -68,7 +68,7 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
   
   // Track if map is currently moving for responsive layer updates
   bool _isMapMoving = false;
-  double _currentZoom = AppConstants.defaultZoom;
+  double _currentZoom = 16.0; // Changed from AppConstants.defaultZoom to 16.0
   LatLng _currentCenter = LatLng(AppConstants.defaultLatitude, AppConstants.defaultLongitude);
   LatLngBounds _visibleBounds = LatLngBounds(
     LatLng(AppConstants.defaultLatitude - 0.05, AppConstants.defaultLongitude - 0.05),
@@ -78,6 +78,13 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
   // Timer to debounce map movement for performance
   Timer? _mapMovementDebounceTimer;
   
+  // Suppress initial error messages and provide retry functionality
+  bool _initialLoadAttempted = false;
+  bool _mapLoadFailed = false;
+  
+  // Add a state variable to track when we're getting user location
+  bool _isGettingUserLocation = false;
+
   @override
   void initState() {
     super.initState();
@@ -102,6 +109,59 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
     
     // Listen for map events
     _mapController.mapEventStream.listen(_handleMapEvent);
+    
+    // Force initial state setup without waiting for the first map event
+    _isMapInitialized = true;
+    
+    // Schedule a post-frame callback to update the map position
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        // Use user's current position if available, otherwise use default
+        final LatLng initialPosition;
+        if (widget.mapProvider.currentPosition != null) {
+          initialPosition = LatLng(
+            widget.mapProvider.currentPosition!.latitude,
+            widget.mapProvider.currentPosition!.longitude
+          );
+          debugPrint('Using user\'s current location: ${initialPosition.latitude}, ${initialPosition.longitude}');
+        } else {
+          // If user location is not available, request it first
+          _requestUserLocation().then((userLocation) {
+            if (mounted && userLocation != null) {
+              // Move map to user location once we get it
+              _mapController.move(userLocation, 16.0);
+              _currentCenter = userLocation;
+              setState(() {});
+              debugPrint('Moved map to delayed user location: ${userLocation.latitude}, ${userLocation.longitude}');
+            }
+          });
+          
+          // Meanwhile use default position
+          initialPosition = LatLng(AppConstants.defaultLatitude, AppConstants.defaultLongitude);
+          debugPrint('Using default location temporarily: ${initialPosition.latitude}, ${initialPosition.longitude}');
+        }
+        
+        // Ensure we start at zoom level 16
+        _mapController.move(initialPosition, 16.0);
+        _currentCenter = initialPosition;
+        
+        // Force detail level to high (3)
+        setState(() {
+          _buildingDetailLevel = 3;
+          _initialLoadAttempted = true;
+          debugPrint('INITIAL MAP SETUP - Zoom: 16.0, Detail Level: 3');
+        });
+        
+        // Add a delay to check if map loaded successfully
+        Future.delayed(const Duration(seconds: 5), () {
+          if (mounted && _isUsingFallbackTiles) {
+            setState(() {
+              _mapLoadFailed = true;
+            });
+          }
+        });
+      }
+    });
   }
   
   @override
@@ -128,6 +188,16 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
     _currentZoom = _mapController.camera.zoom;
     _currentCenter = _mapController.camera.center;
     _visibleBounds = _mapController.camera.visibleBounds;
+    
+    // DEBUG: Print current zoom level
+    debugPrint('Current Zoom Level: ${_currentZoom.toStringAsFixed(2)}');
+    
+    // If we get any map events, the map has loaded successfully
+    if (_mapLoadFailed) {
+      setState(() {
+        _mapLoadFailed = false;
+      });
+    }
     
     // Differentiate between event types for proper response
     if (event is MapEventMoveStart) {
@@ -178,6 +248,9 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
     }
     
     if (_buildingDetailLevel != newLevel) {
+      // DEBUG: Print detail level change
+      debugPrint('Zoom Level: ${zoom.toStringAsFixed(2)} - Detail Level changing from $_buildingDetailLevel to $newLevel');
+      
       setState(() {
         _buildingDetailLevel = newLevel;
       });
@@ -247,11 +320,8 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
                                   child: FlutterMap(
                                     mapController: _mapController,
                                     options: MapOptions(
-                                      initialCenter: LatLng(
-                                        AppConstants.defaultLatitude,
-                                        AppConstants.defaultLongitude
-                                      ),
-                                      initialZoom: AppConstants.defaultZoom,
+                                      initialCenter: _currentCenter,
+                                      initialZoom: 16.0,
                                       minZoom: 2.0, // Set lower minimum zoom to allow seeing more of the world
                                       maxZoom: 19.0, // Allow high zoom for detail
                                       onMapEvent: _handleMapEvent,
@@ -277,11 +347,10 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
                                             child: child,
                                           );
                                         },
-                                        // Add error handling for the TileLayer
+                                        // Improved error handling for the TileLayer
                                         errorTileCallback: (tile, error, stackTrace) {
-                                          debugPrint('Tile error: $error - Using fallback tile source');
-                                          // We can't use fallbackUrls directly, but we can handle errors manually
-                                          // and rebuild the layer with a different URL if needed
+                                          // Don't show error popup, just log to console and use fallback
+                                          debugPrint('Tile error: ${error.toString().substring(0, math.min(100, error.toString().length))} - Using fallback');
                                           if (!_isUsingFallbackTiles && mounted) {
                                             setState(() {
                                               _isUsingFallbackTiles = true;
@@ -426,6 +495,164 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
                                       ),
                                     ),
                                   ),
+                                
+                                // Map controls overlay
+                                Positioned(
+                                  bottom: 85,
+                                  right: 16,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      // Tilt control
+                                      MapControlButton(
+                                        icon: Icons.layers,
+                                        tooltip: '3D Toggle',
+                                        onPressed: _toggleTilt,
+                                      ),
+                                      const SizedBox(height: 8),
+                                      
+                                      // Zoom in
+                                      MapControlButton(
+                                        icon: Icons.add,
+                                        tooltip: 'Zoom In',
+                                        onPressed: () => _animateZoom(_mapController.camera.zoom + 1),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      
+                                      // Zoom out
+                                      MapControlButton(
+                                        icon: Icons.remove,
+                                        tooltip: 'Zoom Out',
+                                        onPressed: () => _animateZoom(_mapController.camera.zoom - 1),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      
+                                      // Toggle location tracking
+                                      MapControlButton(
+                                        icon: widget.mapProvider.isLocationTracking
+                                          ? Icons.my_location
+                                          : Icons.location_searching,
+                                        tooltip: widget.mapProvider.isLocationTracking
+                                          ? 'Tracking On'
+                                          : 'Locate Me',
+                                        onPressed: () {
+                                          if (widget.mapProvider.currentPosition != null) {
+                                            widget.mapProvider.toggleLocationTracking();
+                                            animateToLocation(
+                                              widget.mapProvider.currentPosition!.latitude,
+                                              widget.mapProvider.currentPosition!.longitude,
+                                              zoom: 16,
+                                            );
+                                          }
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ),
+
+                                // Loading indicator overlay
+                                if (widget.mapProvider.isLoading)
+                                  const Center(
+                                    child: Card(
+                                      elevation: 4,
+                                      child: Padding(
+                                        padding: EdgeInsets.all(16),
+                                        child: CircularProgressIndicator(),
+                                      ),
+                                    ),
+                                  ),
+                                
+                                // Initial map loading indicator
+                                if (!_initialLoadAttempted)
+                                  const Center(
+                                    child: Card(
+                                      elevation: 4,
+                                      child: Padding(
+                                        padding: EdgeInsets.all(16),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            CircularProgressIndicator(),
+                                            SizedBox(height: 16),
+                                            Text(
+                                              "Loading map...",
+                                              style: TextStyle(fontWeight: FontWeight.bold),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                
+                                // DEBUG: Zoom level indicator overlay
+                                Positioned(
+                                  top: 10,
+                                  left: 10,
+                                  child: GestureDetector(
+                                    onTap: () {
+                                      // Print detailed debug information
+                                      debugPrint('======= MAP DEBUG INFO =======');
+                                      debugPrint('Zoom Level: ${_currentZoom.toStringAsFixed(4)}');
+                                      debugPrint('Center: ${_currentCenter.latitude.toStringAsFixed(6)}, ${_currentCenter.longitude.toStringAsFixed(6)}');
+                                      debugPrint('Bounds: SW(${_visibleBounds.southWest.latitude.toStringAsFixed(6)}, ${_visibleBounds.southWest.longitude.toStringAsFixed(6)}) - NE(${_visibleBounds.northEast.latitude.toStringAsFixed(6)}, ${_visibleBounds.northEast.longitude.toStringAsFixed(6)})');
+                                      debugPrint('Detail Level: $_buildingDetailLevel');
+                                      debugPrint('Tilt Angle: ${_tiltAngle.toStringAsFixed(2)} (${(_tiltAngle * 57.3).toStringAsFixed(0)}°)');
+                                      debugPrint('Rotation: ${_rotationAngle.toStringAsFixed(2)} (${(_rotationAngle * 57.3).toStringAsFixed(0)}°)');
+                                      debugPrint('Map Moving: $_isMapMoving');
+                                      debugPrint('Using fallback tiles: $_isUsingFallbackTiles');
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withOpacity(0.7),
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      child: Text(
+                                        'Zoom: ${_currentZoom.toStringAsFixed(2)} | Detail: $_buildingDetailLevel',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+
+                                // Location loading indicator
+                                if (_isGettingUserLocation)
+                                  Positioned(
+                                    top: 60,
+                                    left: 0,
+                                    right: 0,
+                                    child: Center(
+                                      child: Card(
+                                        color: Colors.blue.shade50,
+                                        elevation: 4,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              SizedBox(
+                                                width: 16,
+                                                height: 16,
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                  valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).primaryColor),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              const Text(
+                                                "Getting your location...",
+                                                style: TextStyle(fontWeight: FontWeight.bold),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                               ],
                             ),
                           ),
@@ -437,74 +664,8 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
               ),
             ),
 
-            // Map controls overlay
-            Positioned(
-              bottom: 85,
-              right: 16,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Tilt control
-                  MapControlButton(
-                    icon: Icons.layers,
-                    tooltip: '3D Toggle',
-                    onPressed: _toggleTilt,
-                  ),
-                  const SizedBox(height: 8),
-                  
-                  // Zoom in
-                  MapControlButton(
-                    icon: Icons.add,
-                    tooltip: 'Zoom In',
-                    onPressed: () => _animateZoom(_mapController.camera.zoom + 1),
-                  ),
-                  const SizedBox(height: 8),
-                  
-                  // Zoom out
-                  MapControlButton(
-                    icon: Icons.remove,
-                    tooltip: 'Zoom Out',
-                    onPressed: () => _animateZoom(_mapController.camera.zoom - 1),
-                  ),
-                  const SizedBox(height: 8),
-                  
-                  // Toggle location tracking
-                  MapControlButton(
-                    icon: widget.mapProvider.isLocationTracking
-                      ? Icons.my_location
-                      : Icons.location_searching,
-                    tooltip: widget.mapProvider.isLocationTracking
-                      ? 'Tracking On'
-                      : 'Locate Me',
-                    onPressed: () {
-                      if (widget.mapProvider.currentPosition != null) {
-                        widget.mapProvider.toggleLocationTracking();
-                        animateToLocation(
-                          widget.mapProvider.currentPosition!.latitude,
-                          widget.mapProvider.currentPosition!.longitude,
-                          zoom: 16,
-                        );
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-
-            // Loading indicator overlay
-            if (widget.mapProvider.isLoading)
-              const Center(
-                child: Card(
-                  elevation: 4,
-                  child: Padding(
-                    padding: EdgeInsets.all(16),
-                    child: CircularProgressIndicator(),
-                  ),
-                ),
-              ),
-              
-            // Error message overlay
-            if (widget.mapProvider.hasNetworkError)
+            // Error message overlay - Only show for non-initial errors
+            if (widget.mapProvider.hasNetworkError && _initialLoadAttempted && !_mapLoadFailed)
               Positioned(
                 bottom: 120,
                 left: 16,
@@ -517,6 +678,53 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
                       widget.mapProvider.errorMessage,
                       style: const TextStyle(color: Colors.red),
                       textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
+
+            // Retry button for map loading failures
+            if (_mapLoadFailed)
+              Positioned(
+                bottom: 120,
+                left: 50,
+                right: 50,
+                child: Card(
+                  color: Colors.blue.shade100,
+                  elevation: 8,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: InkWell(
+                    onTap: _retryMapLoading,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text(
+                            "Map loading seems slow",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.refresh, color: Theme.of(context).primaryColor),
+                              const SizedBox(width: 8),
+                              const Text(
+                                "Tap to retry",
+                                style: TextStyle(
+                                  color: Colors.black87,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -722,6 +930,82 @@ class FlutterMapWidgetState extends State<FlutterMapWidget> with TickerProviderS
         ),
       ),
     );
+  }
+
+  // Retry map loading
+  void _retryMapLoading() {
+    setState(() {
+      _mapLoadFailed = false;
+      _isUsingFallbackTiles = false;
+    });
+    
+    // Use user's location if available
+    final LatLng targetLocation;
+    if (widget.mapProvider.currentPosition != null) {
+      targetLocation = LatLng(
+        widget.mapProvider.currentPosition!.latitude,
+        widget.mapProvider.currentPosition!.longitude
+      );
+      debugPrint('Retrying with user location: ${targetLocation.latitude}, ${targetLocation.longitude}');
+    } else {
+      targetLocation = LatLng(AppConstants.defaultLatitude, AppConstants.defaultLongitude);
+      debugPrint('Retrying with default location');
+      
+      // Try to get user location if not available
+      _requestUserLocation().then((userLocation) {
+        if (mounted && userLocation != null) {
+          // Move map to user location once we get it
+          _mapController.move(userLocation, 16.0);
+          _currentCenter = userLocation;
+          setState(() {});
+          debugPrint('Later moved map to user location: ${userLocation.latitude}, ${userLocation.longitude}');
+        }
+      });
+    }
+    
+    // Try to reload map
+    _mapController.move(targetLocation, 16.0);
+    _currentCenter = targetLocation;
+    
+    debugPrint('RETRYING MAP LOAD - Zoom: 16.0, Detail Level: 3');
+    
+    // Check again after delay
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted && _isUsingFallbackTiles) {
+        setState(() {
+          _mapLoadFailed = true;
+        });
+      }
+    });
+  }
+
+  // Helper method to request user location if not already available
+  Future<LatLng?> _requestUserLocation() async {
+    try {
+      setState(() {
+        _isGettingUserLocation = true;
+      });
+      
+      await widget.mapProvider.requestLocationPermission();
+      // Wait a moment for location to be acquired
+      await Future.delayed(const Duration(seconds: 2));
+      
+      if (widget.mapProvider.currentPosition != null) {
+        return LatLng(
+          widget.mapProvider.currentPosition!.latitude,
+          widget.mapProvider.currentPosition!.longitude
+        );
+      }
+    } catch (e) {
+      debugPrint('Error requesting user location: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isGettingUserLocation = false;
+        });
+      }
+    }
+    return null;
   }
 }
 
